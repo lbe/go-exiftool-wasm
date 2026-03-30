@@ -1,0 +1,33 @@
+(! 72372)-> go test -test.fullpath=true -benchmem -run=^$  -bench . github.com/ncruces/go-exiftool
+goos: linux
+goarch: amd64
+pkg: github.com/ncruces/go-exiftool
+cpu: Intel(R) Xeon(R) CPU E5-2680 v3 @ 2.50GHz
+BenchmarkCommand_Version-24                            5         247856200 ns/op           46288 B/op         61 allocs/op
+BenchmarkNewServer-24                                  8         218188560 ns/op           11914 B/op         47 allocs/op
+BenchmarkServerCommand_Version-24                   6501            167587 ns/op               9 B/op          1 allocs/op
+BenchmarkServerCommand_ReadTags-24                   193           5286412 ns/op             155 B/op          1 allocs/op
+BenchmarkServerCommand_AllTags-24                    172           6726668 ns/op            1841 B/op          1 allocs/op
+BenchmarkServerCommand_JSON-24                       152           7500897 ns/op            1335 B/op          1 allocs/op
+BenchmarkServerCommand_MultipleFiles-24              139          10037580 ns/op             348 B/op          1 allocs/op
+BenchmarkCommand_ReadTags-24                           5         225097885 ns/op           46627 B/op         61 allocs/op
+BenchmarkCommand_AllTags-24                            6         225371735 ns/op           52264 B/op         62 allocs/op
+BenchmarkCommand_JSON-24                               4         250471847 ns/op           48240 B/op         61 allocs/op
+BenchmarkCommand_StdinImage-24                         5         201195096 ns/op           48467 B/op         69 allocs/op
+BenchmarkCommand_StdinImage_Tags-24                    6         207111838 ns/op           46538 B/op         68 allocs/op
+BenchmarkServer_TempFileImage-24                     214           6434678 ns/op            1533 B/op          7 allocs/op
+BenchmarkCommand_SequentialVersion-24                  5         224610287 ns/op           46028 B/op         60 allocs/op
+BenchmarkServer_SequentialVersion-24                6061            197168 ns/op               9 B/op          1 allocs/op
+BenchmarkCommand_SequentialRead-24                     5         228482707 ns/op           46073 B/op         60 allocs/op
+BenchmarkServer_SequentialRead-24                    255           4903303 ns/op              81 B/op          1 allocs/op
+BenchmarkServerCommand_SmallJPG-24                   259           4375039 ns/op             736 B/op          1 allocs/op
+BenchmarkServerCommand_MediumJPG-24                  178           7105280 ns/op            1327 B/op          1 allocs/op
+BenchmarkServerCommand_LargeJPG-24                    24          54848246 ns/op           21172 B/op          1 allocs/op
+BenchmarkServerCommand_PNG-24                        194           5486668 ns/op            1195 B/op          1 allocs/op
+BenchmarkServerCommand_TIFF-24                       316           4599447 ns/op            1178 B/op          1 allocs/op
+BenchmarkServerCommand_MediumJPG_AllTags-24          144           7454995 ns/op            1850 B/op          1 allocs/op
+BenchmarkServerCommand_LargeJPG_AllTags-24            19          58626212 ns/op           25221 B/op          1 allocs/op
+BenchmarkServerCommand_PNG_AllTags-24                243           5391713 ns/op            1826 B/op          1 allocs/op
+BenchmarkServerCommand_TIFF_AllTags-24               309           4390937 ns/op            1563 B/op          1 allocs/op
+PASS
+ok      github.com/ncruces/go-exiftool  81.656s

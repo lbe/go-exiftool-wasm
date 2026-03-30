@@ -1,0 +1,40 @@
+11:37:29 (whgi@pm1-lxc-deb08-01)-(jobs:0)-(~/src2/go-exiftool)
+(! 72380)-> go test -test.fullpath=true -benchmem -run=^$  -bench .
+goos: linux
+goarch: amd64
+pkg: github.com/lbe/go-exiftool
+cpu: Intel(R) Xeon(R) CPU E5-2680 v3 @ 2.50GHz
+BenchmarkCommand_Version-24                            1        8333742442 ns/op        341637808 B/op    332149 allocs/op
+BenchmarkRun_Version-24                                1        7949399413 ns/op        341550288 B/op    331947 allocs/op
+BenchmarkNewServer-24                                  1        8262773432 ns/op        341558616 B/op    332135 allocs/op
+BenchmarkServerCommand_Version-24                    574           1822878 ns/op           76138 B/op         10 allocs/op
+BenchmarkServerCommand_ReadTags-24                     5         200822678 ns/op         8742846 B/op       1148 allocs/op
+BenchmarkServerCommand_AllTags-24                      4         251072256 ns/op        10929396 B/op       1421 allocs/op
+BenchmarkServerCommand_JSON-24                        13          87858154 ns/op         3365273 B/op        465 allocs/op
+BenchmarkServerCommand_MultipleFiles-24                1        1058213438 ns/op        43706744 B/op       5622 allocs/op
+BenchmarkCommand_ReadTags-24                           1        8305843380 ns/op        341559184 B/op    332159 allocs/op
+BenchmarkCommand_AllTags-24                            1        8676631960 ns/op        341561744 B/op    332131 allocs/op
+BenchmarkCommand_JSON-24                               1        8327799001 ns/op        341561744 B/op    332136 allocs/op
+BenchmarkRun_ReadTags-24                               1        8451647722 ns/op        341557808 B/op    332097 allocs/op
+BenchmarkRun_AllTags-24                                1        9122035563 ns/op        341622536 B/op    332086 allocs/op
+BenchmarkRun_JSON-24                                   1        8870147143 ns/op        341596616 B/op    332090 allocs/op
+BenchmarkCommand_StdinImage-24                         1        8374063899 ns/op        341559944 B/op    332108 allocs/op
+BenchmarkCommand_StdinImage_Tags-24                    1        8564734682 ns/op        341556960 B/op    332126 allocs/op
+BenchmarkServer_TempFileImage-24                       3         333967938 ns/op        14570232 B/op       1872 allocs/op
+BenchmarkCommand_SequentialVersion-24                  1        8368954809 ns/op        341553624 B/op    332041 allocs/op
+BenchmarkServer_SequentialVersion-24                 681           1550051 ns/op           64176 B/op          9 allocs/op
+BenchmarkCommand_SequentialRead-24                     1        8425695070 ns/op        341559136 B/op    332154 allocs/op
+BenchmarkServer_SequentialRead-24                      6         203392918 ns/op         7286038 B/op        963 allocs/op
+BenchmarkServerCommand_SmallJPG-24                     3         358755437 ns/op        14570058 B/op       1882 allocs/op
+BenchmarkServerCommand_MediumJPG-24                    1        1093874394 ns/op        43704512 B/op       5567 allocs/op
+BenchmarkServerCommand_LargeJPG-24                     1        1037000871 ns/op        43785784 B/op       5723 allocs/op
+BenchmarkServerCommand_PNG-24                          2         501613971 ns/op        21854720 B/op       2820 allocs/op
+BenchmarkServerCommand_TIFF-24                         4         255576273 ns/op        10928760 B/op       1421 allocs/op
+BenchmarkServerCommand_MediumJPG_AllTags-24            4         266814010 ns/op        10929396 B/op       1421 allocs/op
+BenchmarkServerCommand_LargeJPG_AllTags-24             2         788173294 ns/op        48129068 B/op       2878 allocs/op
+BenchmarkServerCommand_PNG_AllTags-24                  3         349063703 ns/op        14571146 B/op       1882 allocs/op
+BenchmarkServerCommand_TIFF_AllTags-24                 7         148891391 ns/op         6246685 B/op        824 allocs/op
+PASS
+ok      github.com/lbe/go-exiftool      819.885s
+
+
