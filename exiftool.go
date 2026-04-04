@@ -1,9 +1,9 @@
 package exiftool
 
 import (
-	"bytes"
 	"context"
 	"embed"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,14 +11,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
-	"github.com/tetratelabs/wazero/sys"
+	wasm2go "github.com/lbe/go-exiftool/zeroperl"
 )
-
-//go:embed embed/zeroperl.wasm
-var wasmBinary []byte
 
 //go:embed all:embed/perl-wasi-prefix
 var perlFSRoot embed.FS
@@ -28,7 +22,6 @@ var exiftoolScript []byte
 
 const scriptPreamble = "use IO::Handle; STDOUT->autoflush(1); STDERR->autoflush(1);\n"
 
-// overlayFS implements [fs.FS] by opening name on each layer in order until one succeeds.
 type overlayFS struct {
 	layers []fs.FS
 }
@@ -44,8 +37,6 @@ func (o *overlayFS) Open(name string) (fs.File, error) {
 	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 }
 
-// devNullFS provides a minimal /dev tree ("." listing and file "null") for WASI mounts
-// without importing [testing/fstest].
 type devNullFS struct{}
 
 func (devNullFS) Open(name string) (fs.File, error) {
@@ -64,14 +55,12 @@ type devNullDir struct{ read bool }
 func (*devNullDir) Stat() (fs.FileInfo, error) { return devNullDirInfo{}, nil }
 func (*devNullDir) Read([]byte) (int, error)   { return 0, io.EOF }
 func (*devNullDir) Close() error               { return nil }
-
 func (d *devNullDir) ReadDir(n int) ([]fs.DirEntry, error) {
 	if d.read {
 		return nil, io.EOF
 	}
 	d.read = true
-	info := devNullFileInfo{}
-	return []fs.DirEntry{fs.FileInfoToDirEntry(info)}, nil
+	return []fs.DirEntry{fs.FileInfoToDirEntry(devNullFileInfo{})}, nil
 }
 
 type devNullDirInfo struct{}
@@ -98,8 +87,6 @@ func (devNullFileInfo) ModTime() time.Time { return time.Time{} }
 func (devNullFileInfo) IsDir() bool        { return false }
 func (devNullFileInfo) Sys() any           { return nil }
 
-// perlFS returns the embedded Perl tree (stdlib + wasm32-wasi) as an [fs.FS]. It panics
-// if the embed path is wrong; that indicates a broken build, not a runtime user error.
 func perlFS() fs.FS {
 	sub, err := fs.Sub(perlFSRoot, "embed/perl-wasi-prefix")
 	if err != nil {
@@ -108,36 +95,10 @@ func perlFS() fs.FS {
 	return sub
 }
 
-// defaultRootFS returns an overlay filesystem with embedded Perl libraries and
-// the host's current working directory. This allows Command() to access host
-// filesystem paths. Be aware that files accessible from the process CWD will
-// be visible to the WASM sandbox.
 func defaultRootFS() fs.FS {
 	return &overlayFS{layers: []fs.FS{perlFS(), os.DirFS(".")}}
 }
 
-// newRuntime builds a wazero runtime with the zeroperl env import stub and WASI snapshot1.
-func newRuntime(ctx context.Context) (wazero.Runtime, error) {
-	r := wazero.NewRuntime(ctx)
-	_, err := r.NewHostModuleBuilder("env").
-		NewFunctionBuilder().
-		WithFunc(func(ctx context.Context, m api.Module, funcID, argc, argv uint32) uint32 {
-			return 0
-		}).
-		Export("call_host_function").
-		Instantiate(ctx)
-	if err != nil {
-		if closeErr := r.Close(ctx); closeErr != nil {
-			return nil, fmt.Errorf("failed to instantiate env module: %w (close error: %v)", err, closeErr)
-		}
-		return nil, fmt.Errorf("failed to instantiate env module: %w", err)
-	}
-	wasi_snapshot_preview1.MustInstantiate(ctx, r)
-	return r, nil
-}
-
-// commandArgs builds argv for [Command]: optional [Arg1], optional "-config" [Config],
-// "-charset filename=utf8", then caller arguments.
 func commandArgs(arg []string) []string {
 	var args []string
 	if Arg1 != "" {
@@ -151,192 +112,122 @@ func commandArgs(arg []string) []string {
 	return args
 }
 
-// evalModule instantiates a WASM module, runs zeroperl_init, copies the embedded ExifTool
-// script and argv into guest memory, and calls zeroperl_eval. Exit code 0 from Perl is
-// treated as success ([sys.ExitError]).
-func evalModule(ctx context.Context, r wazero.Runtime, compiled wazero.CompiledModule,
-	rootFS fs.FS, workFS fs.FS, writableDirs []string, stdin io.Reader, stdout, stderr *bytes.Buffer, args ...string) (result []byte, err error) {
-
-	devFS := devNullFS{}
-	if stdin == nil {
-		stdin = bytes.NewReader(nil)
+func newModule(guestIO GuestIO, rootFS fs.FS, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
+	mounts := []mountEntry{
+		{guestPath: "/", root: rootFS, writable: false},
+		{guestPath: "/dev", root: devNullFS{}, writable: false},
 	}
-
-	fsConfig := wazero.NewFSConfig().
-		WithFSMount(rootFS, "/").
-		WithFSMount(devFS, "/dev")
 	if workFS != nil {
-		fsConfig = fsConfig.WithFSMount(workFS, "/work")
+		mounts = append(mounts, mountEntry{guestPath: "/work", root: workFS, writable: false})
 	}
 	for _, dir := range writableDirs {
-		fsConfig = fsConfig.WithDirMount(dir, dir)
+		mounts = append(mounts, mountEntry{guestPath: dir, root: os.DirFS(dir), writable: true})
 	}
 
-	config := wazero.NewModuleConfig().
-		WithStdout(stdout).
-		WithStderr(stderr).
-		WithStdin(stdin).
-		WithName("zeroperl").
-		WithArgs("zeroperl").
-		WithStartFunctions().
-		WithEnv("PERL5LIB", "/lib/5.42.0:/lib/5.42.0/wasm32-wasi").
-		WithFSConfig(fsConfig)
-
-	mod, err := r.InstantiateModule(ctx, compiled, config)
-	if err != nil {
-		return nil, fmt.Errorf("wasm instantiate failed: %w", err)
-	}
-	defer func() { _ = mod.Close(ctx) }()
-
-	initFn := mod.ExportedFunction("zeroperl_init")
-	if initFn == nil {
-		return nil, fmt.Errorf("zeroperl_init not found")
-	}
-	results, err := initFn.Call(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("zeroperl_init failed: %w", err)
-	}
-	if results[0] != 0 {
-		return nil, fmt.Errorf("zeroperl_init returned %d", results[0])
+	ws := &wasiState{}
+	mod := wasm2go.New(ws, ws)
+	ws.module = mod
+	ws.memory = moduleMemory(mod)
+	ws.mounts = mounts
+	ws.guestIO = guestIO
+	ws.fds = make([]fdEntry, 3, 8)
+	ws.fds[0] = fdEntry{fdType: fdCharDev, path: "stdin"}
+	ws.fds[1] = fdEntry{fdType: fdCharDev, path: "stdout"}
+	ws.fds[2] = fdEntry{fdType: fdCharDev, path: "stderr"}
+	for _, m := range mounts {
+		ws.preopens = append(ws.preopens, fdEntry{path: m.guestPath, fdType: fdDir})
 	}
 
-	mallocFn := mod.ExportedFunction("malloc")
-	freeFn := mod.ExportedFunction("free")
-	mem := mod.Memory()
-	if mallocFn == nil || freeFn == nil || mem == nil {
-		return nil, fmt.Errorf("required wasm exports not found")
-	}
+	mod.X_initialize()
 
-	writeString := func(s string) (uint32, error) {
-		b := append([]byte(s), 0)
-		res, err := mallocFn.Call(ctx, uint64(len(b)))
-		if err != nil {
-			return 0, fmt.Errorf("malloc failed for string of length %d: %w", len(b), err)
-		}
-		ptr := uint32(res[0])
-		if !mem.Write(ptr, b) {
-			if _, freeErr := freeFn.Call(ctx, uint64(ptr)); freeErr != nil {
-				return 0, fmt.Errorf("failed to write %d bytes to wasm memory at address %d (free also failed: %w)", len(b), ptr, freeErr)
-			}
-			return 0, fmt.Errorf("failed to write %d bytes to wasm memory at address %d", len(b), ptr)
-		}
-		return ptr, nil
-	}
+	return mod, ws, nil
+}
 
-	wrapper := scriptPreamble + string(exiftoolScript)
-	scriptPtr, err := writeString(wrapper)
-	if err != nil {
-		return nil, fmt.Errorf("failed to allocate script memory: %w", err)
-	}
+func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []byte, err error) {
 	defer func() {
-		_, _ = freeFn.Call(ctx, uint64(scriptPtr))
+		if r := recover(); r != nil {
+			if ep, ok := r.(exitPanic); ok {
+				if ep.code != 0 {
+					stderrStr := ""
+					if dio, ok := ws.guestIO.(*DirectIO); ok {
+						stderrStr = dio.StderrB.String()
+					}
+					err = fmt.Errorf("exiftool exited with code %d\nstderr: %s", ep.code, stderrStr)
+				}
+			} else {
+				panic(r)
+			}
+		}
 	}()
 
-	argPtrs := make([]uint32, len(args))
+	rc := mod.Xzeroperl_init()
+	if rc != 0 {
+		return nil, fmt.Errorf("zeroperl_init returned %d", rc)
+	}
+
+	mem := ws.mem()
+	wrapper := scriptPreamble + string(exiftoolScript)
+	scriptPtr := mod.Xmalloc(int32(len(wrapper) + 1))
+	copy(mem[scriptPtr:], wrapper)
+	mem[scriptPtr+int32(len(wrapper))] = 0
+	defer mod.Xfree(scriptPtr)
+
+	argPtrs := make([]int32, len(args))
 	for i, arg := range args {
-		argPtrs[i], err = writeString(arg)
-		if err != nil {
-			for j := 0; j < i; j++ {
-				_, _ = freeFn.Call(ctx, uint64(argPtrs[j]))
-			}
-			return nil, fmt.Errorf("failed to allocate arg memory: %w", err)
-		}
+		b := append([]byte(arg), 0)
+		argPtrs[i] = mod.Xmalloc(int32(len(b)))
+		copy(mem[argPtrs[i]:], b)
 	}
 	defer func() {
 		for _, p := range argPtrs {
-			_, _ = freeFn.Call(ctx, uint64(p))
+			mod.Xfree(p)
 		}
 	}()
 
-	var argvPtr uint32
+	var argvPtr int32
 	if len(argPtrs) > 0 {
-		res, mallocErr := mallocFn.Call(ctx, uint64(len(argPtrs)*4))
-		if mallocErr != nil {
-			return nil, fmt.Errorf("failed to allocate argv: %w", mallocErr)
-		}
-		argvPtr = uint32(res[0])
-		defer func() {
-			_, _ = freeFn.Call(ctx, uint64(argvPtr))
-		}()
+		argvPtr = mod.Xmalloc(int32(len(argPtrs) * 4))
 		for i, p := range argPtrs {
-			if !mem.WriteUint32Le(argvPtr+uint32(i*4), p) {
-				return nil, fmt.Errorf("failed to write argv[%d] at offset %d", i, i*4)
-			}
+			binary.LittleEndian.PutUint32(mem[argvPtr+int32(i*4):], uint32(p))
 		}
+		defer mod.Xfree(argvPtr)
 	}
 
-	evalFn := mod.ExportedFunction("zeroperl_eval")
-	if evalFn == nil {
-		return nil, fmt.Errorf("zeroperl_eval not found")
-	}
+	mod.Xzeroperl_eval(scriptPtr, 1, int32(len(args)), argvPtr)
 
-	_, err = evalFn.Call(ctx, uint64(scriptPtr), uint64(1), uint64(len(args)), uint64(argvPtr))
-	if err != nil {
-		var exitErr *sys.ExitError
-		if errors.As(err, &exitErr) {
-			if exitErr.ExitCode() != 0 {
-				return stdout.Bytes(), fmt.Errorf("exiftool exited with code %d\nstderr: %s",
-					exitErr.ExitCode(), stderr.String())
-			}
-		} else {
-			return stdout.Bytes(), fmt.Errorf("wasm eval failed: %w\nstderr: %s",
-				err, stderr.String())
-		}
+	if dio, ok := ws.guestIO.(*DirectIO); ok {
+		return dio.StdoutB.Bytes(), nil
 	}
-
-	return stdout.Bytes(), nil
+	return nil, nil
 }
 
-// Run executes ExifTool once with embedded Perl at "/" and workFS (if non-nil) mounted
-// at "/work". Pass file paths in args as "/work/..." for files that live in workFS.
-// Any non-empty stderr after a successful eval is reported as an error.
 func Run(ctx context.Context, workFS fs.FS, args ...string) (out []byte, err error) {
-	var stderr bytes.Buffer
-	r, err := newRuntime(ctx)
+	guestIO := NewDirectIO(nil)
+	mod, ws, err := newModule(guestIO, perlFS(), workFS, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if closeErr := r.Close(ctx); closeErr != nil && err == nil {
-			err = closeErr
-		}
-	}()
-	compiled, err := r.CompileModule(ctx, wasmBinary)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compile wasm: %w", err)
-	}
-	var stdout bytes.Buffer
-	out, err = evalModule(ctx, r, compiled, perlFS(), workFS, nil, nil, &stdout, &stderr, args...)
+	_ = mod
+	out, err = evalModule(mod, ws, args...)
 	if err != nil {
 		return out, err
 	}
-	if stderr.Len() > 0 {
-		return out, fmt.Errorf("exiftool stderr: %s", stderr.String())
+	if dio, ok := ws.guestIO.(*DirectIO); ok && dio.StderrB.Len() > 0 {
+		return out, fmt.Errorf("exiftool stderr: %s", dio.StderrB.String())
 	}
 	return out, nil
 }
 
-// RunDebug is like [Run] but prints stderr to the host process's standard error and
-// does not treat stderr alone as a failure after a successful WASM eval.
 func RunDebug(ctx context.Context, workFS fs.FS, args ...string) (out []byte, err error) {
-	var stderr bytes.Buffer
-	r, err := newRuntime(ctx)
+	guestIO := NewDirectIO(nil)
+	mod, ws, err := newModule(guestIO, perlFS(), workFS, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if closeErr := r.Close(ctx); closeErr != nil && err == nil {
-			err = closeErr
-		}
-	}()
-	compiled, err := r.CompileModule(ctx, wasmBinary)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compile wasm: %w", err)
-	}
-	var stdout bytes.Buffer
-	out, err = evalModule(ctx, r, compiled, perlFS(), workFS, nil, nil, &stdout, &stderr, args...)
-	if stderr.Len() > 0 {
-		fmt.Fprintf(os.Stderr, "STDERR: %s\n", stderr.String())
+	_ = mod
+	out, err = evalModule(mod, ws, args...)
+	if dio, ok := ws.guestIO.(*DirectIO); ok && dio.StderrB.Len() > 0 {
+		fmt.Fprintf(os.Stderr, "STDERR: %s\n", dio.StderrB.String())
 	}
 	return out, err
 }
