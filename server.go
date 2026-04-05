@@ -73,7 +73,7 @@ func NewServer(commonArg ...string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	compiled, err := r.CompileModule(context.Background(), wasmBinary)
+	compiled, err := r.CompileModule(compileContext(context.Background()), wasmBinary)
 	if err != nil {
 		if closeErr := r.Close(context.Background()); closeErr != nil {
 			return nil, fmt.Errorf("failed to compile wasm: %w (close error: %v)", err, closeErr)
@@ -220,66 +220,16 @@ func (e *Server) start() error {
 		mallocFn := mod.ExportedFunction("malloc")
 		freeFn := mod.ExportedFunction("free")
 		mem := mod.Memory()
+		ctx := context.Background()
 
-		writeString := func(s string) (uint32, error) {
-			b := append([]byte(s), 0)
-			res, err := mallocFn.Call(context.Background(), uint64(len(b)))
-			if err != nil {
-				return 0, fmt.Errorf("malloc failed: %w", err)
-			}
-			ptr := uint32(res[0])
-			if !mem.Write(ptr, b) {
-				if _, freeErr := freeFn.Call(context.Background(), uint64(ptr)); freeErr != nil {
-					return 0, fmt.Errorf("mem.Write failed at %d (free also failed: %w)", ptr, freeErr)
-				}
-				return 0, fmt.Errorf("mem.Write failed at %d", ptr)
-			}
-			return ptr, nil
-		}
-
-		wrapper := scriptPreamble + string(exiftoolScript)
-		scriptPtr, err := writeString(wrapper)
+		scriptPtr, argvPtr, allocPtr, err := packGuestEvalData(ctx, mallocFn, freeFn, mem, cachedWrappedExiftoolScript(), e.args)
 		if err != nil {
 			e.evalErr = fmt.Errorf("failed to allocate script memory: %w", err)
 			return
 		}
 		defer func() {
-			_, _ = freeFn.Call(context.Background(), uint64(scriptPtr))
+			_ = freeGuest(ctx, freeFn, allocPtr)
 		}()
-
-		argPtrs := make([]uint32, len(e.args))
-		for i, arg := range e.args {
-			argPtrs[i], err = writeString(arg)
-			if err != nil {
-				e.evalErr = fmt.Errorf("failed to allocate arg memory: %w", err)
-				for j := 0; j < i; j++ {
-					_, _ = freeFn.Call(context.Background(), uint64(argPtrs[j]))
-				}
-				return
-			}
-			defer func(ptr uint32) {
-				_, _ = freeFn.Call(context.Background(), uint64(ptr))
-			}(argPtrs[i])
-		}
-
-		var argvPtr uint32
-		if len(argPtrs) > 0 {
-			res, err := mallocFn.Call(context.Background(), uint64(len(argPtrs)*4))
-			if err != nil {
-				e.evalErr = fmt.Errorf("failed to allocate argv: %w", err)
-				return
-			}
-			argvPtr = uint32(res[0])
-			defer func() {
-				_, _ = freeFn.Call(context.Background(), uint64(argvPtr))
-			}()
-			for i, p := range argPtrs {
-				if !mem.WriteUint32Le(argvPtr+uint32(i*4), p) {
-					e.evalErr = fmt.Errorf("failed to write argv[%d]", i)
-					return
-				}
-			}
-		}
 
 		evalFn := mod.ExportedFunction("zeroperl_eval")
 		if evalFn == nil {
@@ -287,7 +237,7 @@ func (e *Server) start() error {
 			return
 		}
 
-		_, err = evalFn.Call(context.Background(), uint64(scriptPtr), uint64(1), uint64(len(e.args)), uint64(argvPtr))
+		_, err = evalFn.Call(ctx, uint64(scriptPtr), uint64(1), uint64(len(e.args)), uint64(argvPtr))
 		if err != nil {
 			var exitErr *sys.ExitError
 			if errors.As(err, &exitErr) {

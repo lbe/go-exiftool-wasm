@@ -29,6 +29,26 @@ func TestCommandArgsDefault(t *testing.T) {
 	}
 }
 
+func TestResolvedCacheDir(t *testing.T) {
+	savedCacheDir := CacheDir
+	defer func() { CacheDir = savedCacheDir }()
+
+	CacheDir = "off"
+	if got := resolvedCacheDir(); got != "" {
+		t.Fatalf("expected empty cache dir when disabled, got %q", got)
+	}
+
+	CacheDir = "/tmp/exiftool-cache"
+	if got := resolvedCacheDir(); got != CacheDir {
+		t.Fatalf("expected explicit cache dir %q, got %q", CacheDir, got)
+	}
+
+	CacheDir = ""
+	if got := resolvedCacheDir(); got != defaultCacheDir() {
+		t.Fatalf("expected default cache dir %q, got %q", defaultCacheDir(), got)
+	}
+}
+
 func TestCommandArgsWithArg1(t *testing.T) {
 	savedExec, savedArg1, savedConfig := Exec, Arg1, Config
 	defer func() { Exec, Arg1, Config = savedExec, savedArg1, savedConfig }()

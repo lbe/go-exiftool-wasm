@@ -3,9 +3,149 @@ package exiftool
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 )
+
+const helperProcessModeEnv = "GO_EXIFTOOL_HELPER_PROCESS_MODE"
+const helperProcessCacheDirEnv = "GO_EXIFTOOL_HELPER_CACHE_DIR"
+const helperProcessWorkersEnv = runtimeWorkersEnv
+
+func TestHelperProcess(t *testing.T) {
+	mode := os.Getenv(helperProcessModeEnv)
+	if mode == "" {
+		return
+	}
+
+	CacheDir = os.Getenv(helperProcessCacheDirEnv)
+
+	switch mode {
+	case "command-version":
+		if _, err := Command(nil, "-ver"); err != nil {
+			t.Fatal(err)
+		}
+	case "run-version":
+		if _, err := Run(context.Background(), os.DirFS("testdata"), "-ver"); err != nil {
+			t.Fatal(err)
+		}
+	case "newserver":
+		e, err := NewServer()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Shutdown(); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("unknown helper mode %q", mode)
+	}
+}
+
+func runHelperProcess(b testing.TB, mode, cacheDir, runtimeMode string, debugInfoEnabled bool, workers int) {
+	b.Helper()
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+	cmd.Dir = "."
+	debugInfo := "1"
+	if !debugInfoEnabled {
+		debugInfo = "0"
+	}
+	cmd.Env = append(os.Environ(),
+		helperProcessModeEnv+"="+mode,
+		helperProcessCacheDirEnv+"="+cacheDir,
+		runtimeModeEnv+"="+runtimeMode,
+		runtimeDebugInfoEnv+"="+debugInfo,
+		helperProcessWorkersEnv+"="+fmt.Sprintf("%d", workers),
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		b.Fatalf("helper process failed: %v\n%s", err, out)
+	}
+}
+
+func benchmarkProcessCacheCold(b *testing.B, mode, runtimeMode string, debugInfoEnabled bool, workers int) {
+	parentCacheDir := b.TempDir()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cacheDir := filepath.Join(parentCacheDir, fmt.Sprintf("cold-%d", i))
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			b.Fatal(err)
+		}
+		runHelperProcess(b, mode, cacheDir, runtimeMode, debugInfoEnabled, workers)
+	}
+}
+
+func benchmarkProcessCacheWarm(b *testing.B, mode, runtimeMode string, debugInfoEnabled bool, workers int) {
+	cacheDir := b.TempDir()
+	runHelperProcess(b, mode, cacheDir, runtimeMode, debugInfoEnabled, workers)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		runHelperProcess(b, mode, cacheDir, runtimeMode, debugInfoEnabled, workers)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Category 0: Process-level Persistent Cache Reuse
+// ---------------------------------------------------------------------------
+
+func BenchmarkProcessCommand_Version_Cold(b *testing.B) {
+	benchmarkProcessCacheCold(b, "command-version", "compiler", true, 0)
+}
+
+func BenchmarkProcessCommand_Version_Warm(b *testing.B) {
+	benchmarkProcessCacheWarm(b, "command-version", "compiler", true, 0)
+}
+
+func BenchmarkProcessRun_Version_Cold(b *testing.B) {
+	benchmarkProcessCacheCold(b, "run-version", "compiler", true, 0)
+}
+
+func BenchmarkProcessRun_Version_Warm(b *testing.B) {
+	benchmarkProcessCacheWarm(b, "run-version", "compiler", true, 0)
+}
+
+func BenchmarkProcessNewServer_Cold(b *testing.B) {
+	benchmarkProcessCacheCold(b, "newserver", "compiler", true, 0)
+}
+
+func BenchmarkProcessNewServer_Warm(b *testing.B) {
+	benchmarkProcessCacheWarm(b, "newserver", "compiler", true, 0)
+}
+
+func BenchmarkProcessNewServer_Cold_NoDebugInfo(b *testing.B) {
+	benchmarkProcessCacheCold(b, "newserver", "compiler", false, 0)
+}
+
+func BenchmarkProcessNewServer_Warm_NoDebugInfo(b *testing.B) {
+	benchmarkProcessCacheWarm(b, "newserver", "compiler", false, 0)
+}
+
+func BenchmarkProcessNewServer_Cold_Interpreter(b *testing.B) {
+	benchmarkProcessCacheCold(b, "newserver", "interpreter", false, 0)
+}
+
+func BenchmarkProcessNewServer_Warm_Interpreter(b *testing.B) {
+	benchmarkProcessCacheWarm(b, "newserver", "interpreter", false, 0)
+}
+
+func BenchmarkProcessNewServer_Cold_Workers1(b *testing.B) {
+	benchmarkProcessCacheCold(b, "newserver", "compiler", false, 1)
+}
+
+func BenchmarkProcessNewServer_Cold_Workers2(b *testing.B) {
+	benchmarkProcessCacheCold(b, "newserver", "compiler", false, 2)
+}
+
+func BenchmarkProcessNewServer_Cold_Workers4(b *testing.B) {
+	benchmarkProcessCacheCold(b, "newserver", "compiler", false, 4)
+}
+
+func BenchmarkProcessNewServer_Cold_Workers8(b *testing.B) {
+	benchmarkProcessCacheCold(b, "newserver", "compiler", false, 8)
+}
 
 // ---------------------------------------------------------------------------
 // Category 1: Cold Start (full lifecycle inside b.N loop)

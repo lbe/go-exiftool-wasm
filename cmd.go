@@ -42,7 +42,7 @@ func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []
 		}
 	}()
 
-	compiled, err := r.CompileModule(ctx, wasmBinary)
+	compiled, err := r.CompileModule(compileContext(ctx), wasmBinary)
 	if err != nil {
 		return nil, err
 	}

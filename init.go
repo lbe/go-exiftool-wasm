@@ -19,6 +19,8 @@
 // file argument.
 package exiftool
 
+import "os"
+
 // Exec is retained for compatibility with the original go-exiftool API.
 // This implementation does not execute an external program; the value is ignored.
 var Exec = "exiftool"
@@ -30,3 +32,34 @@ var Arg1 string
 
 // Config, if non-empty, is passed as "-config" and the path value to ExifTool.
 var Config string
+
+// CacheDir controls where wazero stores its persistent compilation cache.
+// If empty, a per-user default cache directory is used when available. On Unix,
+// this follows [os.UserCacheDir], which respects XDG cache conventions.
+//
+// The underlying wazero cache is segregated by version, architecture, and OS,
+// so it is safe to point multiple systems at a shared home directory as long as
+// the cache root itself is shared.
+//
+// If set to "off", the package disables the persistent on-disk cache and uses
+// only the in-memory cache for the current process.
+var CacheDir string
+
+func defaultCacheDir() string {
+	dir, err := os.UserCacheDir()
+	if err != nil || dir == "" {
+		return ""
+	}
+	return dir + string(os.PathSeparator) + "go-exiftool"
+}
+
+func resolvedCacheDir() string {
+	switch dir := CacheDir; {
+	case dir == "":
+		return defaultCacheDir()
+	case dir == "off" || dir == "OFF" || dir == "Off":
+		return ""
+	default:
+		return dir
+	}
+}

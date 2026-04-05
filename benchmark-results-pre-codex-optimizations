@@ -1,0 +1,36 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/lbe/go-exiftool
+cpu: Apple M5
+BenchmarkCommand_Version-10                    	       1	1959967542 ns/op	355659016 B/op	  330180 allocs/op
+BenchmarkRun_Version-10                        	       1	1906727583 ns/op	355602456 B/op	  330063 allocs/op
+BenchmarkNewServer-10                          	       1	1909530250 ns/op	355647632 B/op	  330253 allocs/op
+BenchmarkServerCommand_Version-10              	    6898	    168675 ns/op	    6296 B/op	       1 allocs/op
+BenchmarkServerCommand_ReadTags-10             	     289	   3956125 ns/op	  152623 B/op	      59 allocs/op
+BenchmarkServerCommand_AllTags-10              	     226	   5234131 ns/op	  196146 B/op	      64 allocs/op
+BenchmarkServerCommand_JSON-10                 	     207	   5655825 ns/op	  213253 B/op	      66 allocs/op
+BenchmarkServerCommand_MultipleFiles-10        	     120	   8485986 ns/op	  366653 B/op	     125 allocs/op
+BenchmarkCommand_ReadTags-10                   	       1	1940844000 ns/op	355648248 B/op	  330278 allocs/op
+BenchmarkCommand_AllTags-10                    	       1	1930158250 ns/op	355651328 B/op	  330257 allocs/op
+BenchmarkCommand_JSON-10                       	       1	1928433500 ns/op	355614352 B/op	  330257 allocs/op
+BenchmarkRun_ReadTags-10                       	       1	1986567167 ns/op	355646728 B/op	  330217 allocs/op
+BenchmarkRun_AllTags-10                        	       1	1992361041 ns/op	355711440 B/op	  330206 allocs/op
+BenchmarkRun_JSON-10                           	       1	1995587500 ns/op	355685616 B/op	  330211 allocs/op
+BenchmarkCommand_StdinImage-10                 	       1	1929275208 ns/op	355648912 B/op	  330227 allocs/op
+BenchmarkCommand_StdinImage_Tags-10            	       1	1929676625 ns/op	355609032 B/op	  330241 allocs/op
+BenchmarkServer_TempFileImage-10               	     205	   5813139 ns/op	  215576 B/op	      57 allocs/op
+BenchmarkCommand_SequentialVersion-10          	       1	1906182792 ns/op	355642624 B/op	  330160 allocs/op
+BenchmarkServer_SequentialVersion-10           	    6915	    168489 ns/op	    6281 B/op	       1 allocs/op
+BenchmarkCommand_SequentialRead-10             	       1	1957010458 ns/op	355648024 B/op	  330272 allocs/op
+BenchmarkServer_SequentialRead-10              	     302	   3851001 ns/op	  146097 B/op	      58 allocs/op
+BenchmarkServerCommand_SmallJPG-10             	     337	   3336127 ns/op	  131833 B/op	      56 allocs/op
+BenchmarkServerCommand_MediumJPG-10            	     175	   5752431 ns/op	  251573 B/op	      71 allocs/op
+BenchmarkServerCommand_LargeJPG-10             	      20	  53975188 ns/op	 4815342 B/op	     323 allocs/op
+BenchmarkServerCommand_PNG-10                  	     284	   4075966 ns/op	  156309 B/op	      59 allocs/op
+BenchmarkServerCommand_TIFF-10                 	     280	   4147426 ns/op	  158486 B/op	      59 allocs/op
+BenchmarkServerCommand_MediumJPG_AllTags-10    	     225	   5218290 ns/op	  196997 B/op	      64 allocs/op
+BenchmarkServerCommand_LargeJPG_AllTags-10     	      22	  49325900 ns/op	 4382806 B/op	     297 allocs/op
+BenchmarkServerCommand_PNG_AllTags-10          	     344	   3396231 ns/op	  130300 B/op	      56 allocs/op
+BenchmarkServerCommand_TIFF_AllTags-10         	     337	   3461642 ns/op	  132659 B/op	      56 allocs/op
+PASS
+ok  	github.com/lbe/go-exiftool	221.177s

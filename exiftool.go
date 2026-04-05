@@ -9,10 +9,15 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"github.com/tetratelabs/wazero/sys"
 )
@@ -27,6 +32,90 @@ var perlFSRoot embed.FS
 var exiftoolScript []byte
 
 const scriptPreamble = "use IO::Handle; STDOUT->autoflush(1); STDERR->autoflush(1);\n"
+
+const (
+	runtimeModeEnv      = "GO_EXIFTOOL_WAZERO_RUNTIME_MODE"
+	runtimeDebugInfoEnv = "GO_EXIFTOOL_WAZERO_DEBUG_INFO"
+	runtimeWorkersEnv   = "GO_EXIFTOOL_WAZERO_COMPILATION_WORKERS"
+)
+
+type runtimeConfigKey struct {
+	cacheDir           string
+	mode               string
+	debugInfoEnabled   bool
+	compilationWorkers int
+}
+
+var (
+	runtimeConfigs sync.Map
+	cachedPerlFS   = sync.OnceValue(func() fs.FS {
+		sub, err := fs.Sub(perlFSRoot, "embed/perl-wasi-prefix")
+		if err != nil {
+			panic("exiftool: embedded perl filesystem unavailable: " + err.Error())
+		}
+		return sub
+	})
+	cachedDefaultRootFS = sync.OnceValue(func() fs.FS {
+		return &overlayFS{layers: []fs.FS{perlFS(), os.DirFS(".")}}
+	})
+	cachedWrappedExiftoolScript = sync.OnceValue(func() []byte {
+		wrapped := make([]byte, len(scriptPreamble)+len(exiftoolScript))
+		copy(wrapped, scriptPreamble)
+		copy(wrapped[len(scriptPreamble):], exiftoolScript)
+		return wrapped
+	})
+)
+
+func runtimeConfigMode() string {
+	switch mode := os.Getenv(runtimeModeEnv); mode {
+	case "compiler", "interpreter":
+		return mode
+	default:
+		return "compiler"
+	}
+}
+
+func runtimeDebugInfoEnabled() bool {
+	return os.Getenv(runtimeDebugInfoEnv) == "1"
+}
+
+func runtimeConfigKeyForProcess() runtimeConfigKey {
+	return runtimeConfigKey{
+		cacheDir:           resolvedCacheDir(),
+		mode:               runtimeConfigMode(),
+		debugInfoEnabled:   runtimeDebugInfoEnabled(),
+		compilationWorkers: runtimeCompilationWorkers(),
+	}
+}
+
+func runtimeCompilationWorkers() int {
+	if v := os.Getenv(runtimeWorkersEnv); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return max(runtime.GOMAXPROCS(0)/2, 1)
+}
+
+func buildRuntimeConfig(key runtimeConfigKey) wazero.RuntimeConfig {
+	var config wazero.RuntimeConfig
+	switch key.mode {
+	case "interpreter":
+		config = wazero.NewRuntimeConfigInterpreter()
+	default:
+		config = wazero.NewRuntimeConfigCompiler()
+	}
+	config = config.WithDebugInfoEnabled(key.debugInfoEnabled)
+
+	cache := wazero.NewCompilationCache()
+	if key.cacheDir != "" {
+		persistentCache, err := wazero.NewCompilationCacheWithDir(filepath.Join(key.cacheDir, "wazero"))
+		if err == nil {
+			cache = persistentCache
+		}
+	}
+	return config.WithCompilationCache(cache)
+}
 
 // overlayFS implements [fs.FS] by opening name on each layer in order until one succeeds.
 type overlayFS struct {
@@ -101,11 +190,7 @@ func (devNullFileInfo) Sys() any           { return nil }
 // perlFS returns the embedded Perl tree (stdlib + wasm32-wasi) as an [fs.FS]. It panics
 // if the embed path is wrong; that indicates a broken build, not a runtime user error.
 func perlFS() fs.FS {
-	sub, err := fs.Sub(perlFSRoot, "embed/perl-wasi-prefix")
-	if err != nil {
-		panic("exiftool: embedded perl filesystem unavailable: " + err.Error())
-	}
-	return sub
+	return cachedPerlFS()
 }
 
 // defaultRootFS returns an overlay filesystem with embedded Perl libraries and
@@ -113,13 +198,17 @@ func perlFS() fs.FS {
 // filesystem paths. Be aware that files accessible from the process CWD will
 // be visible to the WASM sandbox.
 func defaultRootFS() fs.FS {
-	return &overlayFS{layers: []fs.FS{perlFS(), os.DirFS(".")}}
+	return cachedDefaultRootFS()
 }
 
 // newRuntime builds a wazero runtime with the zeroperl env import stub and WASI snapshot1.
 func newRuntime(ctx context.Context) (wazero.Runtime, error) {
-	r := wazero.NewRuntime(ctx)
-	_, err := r.NewHostModuleBuilder("env").
+	key := runtimeConfigKeyForProcess()
+	runtimeConfigAny, _ := runtimeConfigs.LoadOrStore(key, buildRuntimeConfig(key))
+	runtimeConfig := runtimeConfigAny.(wazero.RuntimeConfig)
+	r := wazero.NewRuntimeWithConfig(ctx, runtimeConfig)
+	var err error
+	_, err = r.NewHostModuleBuilder("env").
 		NewFunctionBuilder().
 		WithFunc(func(ctx context.Context, m api.Module, funcID, argc, argv uint32) uint32 {
 			return 0
@@ -136,10 +225,21 @@ func newRuntime(ctx context.Context) (wazero.Runtime, error) {
 	return r, nil
 }
 
+func compileContext(ctx context.Context) context.Context {
+	return experimental.WithCompilationWorkers(ctx, runtimeCompilationWorkers())
+}
+
 // commandArgs builds argv for [Command]: optional [Arg1], optional "-config" [Config],
 // "-charset filename=utf8", then caller arguments.
 func commandArgs(arg []string) []string {
-	var args []string
+	capHint := len(arg) + 2
+	if Arg1 != "" {
+		capHint++
+	}
+	if Config != "" {
+		capHint += 2
+	}
+	args := make([]string, 0, capHint)
 	if Arg1 != "" {
 		args = append(args, Arg1)
 	}
@@ -149,6 +249,103 @@ func commandArgs(arg []string) []string {
 	args = append(args, "-charset", "filename=utf8")
 	args = append(args, arg...)
 	return args
+}
+
+func mallocGuest(ctx context.Context, mallocFn api.Function, size int) (uint32, error) {
+	res, err := mallocFn.Call(ctx, uint64(size))
+	if err != nil {
+		return 0, fmt.Errorf("malloc failed for %d bytes: %w", size, err)
+	}
+	return uint32(res[0]), nil
+}
+
+func freeGuest(ctx context.Context, freeFn api.Function, ptr uint32) error {
+	_, err := freeFn.Call(ctx, uint64(ptr))
+	return err
+}
+
+func writeGuestCString(ctx context.Context, mallocFn, freeFn api.Function, mem api.Memory, s string) (uint32, error) {
+	ptr, err := mallocGuest(ctx, mallocFn, len(s)+1)
+	if err != nil {
+		return 0, err
+	}
+	if !mem.WriteString(ptr, s) || !mem.WriteByte(ptr+uint32(len(s)), 0) {
+		if freeErr := freeGuest(ctx, freeFn, ptr); freeErr != nil {
+			return 0, fmt.Errorf("failed to write %d-byte string at address %d (free also failed: %w)", len(s), ptr, freeErr)
+		}
+		return 0, fmt.Errorf("failed to write %d-byte string at address %d", len(s), ptr)
+	}
+	return ptr, nil
+}
+
+func writeGuestNULTerminatedBytes(ctx context.Context, mallocFn, freeFn api.Function, mem api.Memory, b []byte) (uint32, error) {
+	ptr, err := mallocGuest(ctx, mallocFn, len(b)+1)
+	if err != nil {
+		return 0, err
+	}
+	if !mem.Write(ptr, b) || !mem.WriteByte(ptr+uint32(len(b)), 0) {
+		if freeErr := freeGuest(ctx, freeFn, ptr); freeErr != nil {
+			return 0, fmt.Errorf("failed to write %d bytes at address %d (free also failed: %w)", len(b), ptr, freeErr)
+		}
+		return 0, fmt.Errorf("failed to write %d bytes at address %d", len(b), ptr)
+	}
+	return ptr, nil
+}
+
+func alignGuestOffset(offset, align uint32) uint32 {
+	mask := align - 1
+	return (offset + mask) &^ mask
+}
+
+func packGuestEvalData(ctx context.Context, mallocFn, freeFn api.Function, mem api.Memory, script []byte, args []string) (scriptPtr, argvPtr, allocPtr uint32, err error) {
+	offset := uint32(0)
+	scriptOff := offset
+	offset += uint32(len(script) + 1)
+
+	var argvOff uint32
+	if len(args) > 0 {
+		offset = alignGuestOffset(offset, 4)
+		argvOff = offset
+		offset += uint32(len(args) * 4)
+	}
+
+	argOffs := make([]uint32, len(args))
+	for i, arg := range args {
+		argOffs[i] = offset
+		offset += uint32(len(arg) + 1)
+	}
+
+	allocPtr, err = mallocGuest(ctx, mallocFn, int(offset))
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	fail := func(msg string, args ...any) (uint32, uint32, uint32, error) {
+		if freeErr := freeGuest(ctx, freeFn, allocPtr); freeErr != nil {
+			return 0, 0, 0, fmt.Errorf(msg+" (free also failed: %w)", append(args, freeErr)...)
+		}
+		return 0, 0, 0, fmt.Errorf(msg, args...)
+	}
+
+	if !mem.Write(allocPtr+scriptOff, script) || !mem.WriteByte(allocPtr+scriptOff+uint32(len(script)), 0) {
+		return fail("failed to write script into guest memory")
+	}
+
+	for i, arg := range args {
+		argPtr := allocPtr + argOffs[i]
+		if !mem.WriteString(argPtr, arg) || !mem.WriteByte(argPtr+uint32(len(arg)), 0) {
+			return fail("failed to write argv[%d] into guest memory", i)
+		}
+		if len(args) > 0 && !mem.WriteUint32Le(allocPtr+argvOff+uint32(i*4), argPtr) {
+			return fail("failed to write argv pointer %d into guest memory", i)
+		}
+	}
+
+	scriptPtr = allocPtr + scriptOff
+	if len(args) > 0 {
+		argvPtr = allocPtr + argvOff
+	}
+	return scriptPtr, argvPtr, allocPtr, nil
 }
 
 // evalModule instantiates a WASM module, runs zeroperl_init, copies the embedded ExifTool
@@ -207,63 +404,13 @@ func evalModule(ctx context.Context, r wazero.Runtime, compiled wazero.CompiledM
 		return nil, fmt.Errorf("required wasm exports not found")
 	}
 
-	writeString := func(s string) (uint32, error) {
-		b := append([]byte(s), 0)
-		res, err := mallocFn.Call(ctx, uint64(len(b)))
-		if err != nil {
-			return 0, fmt.Errorf("malloc failed for string of length %d: %w", len(b), err)
-		}
-		ptr := uint32(res[0])
-		if !mem.Write(ptr, b) {
-			if _, freeErr := freeFn.Call(ctx, uint64(ptr)); freeErr != nil {
-				return 0, fmt.Errorf("failed to write %d bytes to wasm memory at address %d (free also failed: %w)", len(b), ptr, freeErr)
-			}
-			return 0, fmt.Errorf("failed to write %d bytes to wasm memory at address %d", len(b), ptr)
-		}
-		return ptr, nil
-	}
-
-	wrapper := scriptPreamble + string(exiftoolScript)
-	scriptPtr, err := writeString(wrapper)
+	scriptPtr, argvPtr, allocPtr, err := packGuestEvalData(ctx, mallocFn, freeFn, mem, cachedWrappedExiftoolScript(), args)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate script memory: %w", err)
 	}
 	defer func() {
-		_, _ = freeFn.Call(ctx, uint64(scriptPtr))
+		_ = freeGuest(ctx, freeFn, allocPtr)
 	}()
-
-	argPtrs := make([]uint32, len(args))
-	for i, arg := range args {
-		argPtrs[i], err = writeString(arg)
-		if err != nil {
-			for j := 0; j < i; j++ {
-				_, _ = freeFn.Call(ctx, uint64(argPtrs[j]))
-			}
-			return nil, fmt.Errorf("failed to allocate arg memory: %w", err)
-		}
-	}
-	defer func() {
-		for _, p := range argPtrs {
-			_, _ = freeFn.Call(ctx, uint64(p))
-		}
-	}()
-
-	var argvPtr uint32
-	if len(argPtrs) > 0 {
-		res, mallocErr := mallocFn.Call(ctx, uint64(len(argPtrs)*4))
-		if mallocErr != nil {
-			return nil, fmt.Errorf("failed to allocate argv: %w", mallocErr)
-		}
-		argvPtr = uint32(res[0])
-		defer func() {
-			_, _ = freeFn.Call(ctx, uint64(argvPtr))
-		}()
-		for i, p := range argPtrs {
-			if !mem.WriteUint32Le(argvPtr+uint32(i*4), p) {
-				return nil, fmt.Errorf("failed to write argv[%d] at offset %d", i, i*4)
-			}
-		}
-	}
 
 	evalFn := mod.ExportedFunction("zeroperl_eval")
 	if evalFn == nil {
@@ -301,7 +448,7 @@ func Run(ctx context.Context, workFS fs.FS, args ...string) (out []byte, err err
 			err = closeErr
 		}
 	}()
-	compiled, err := r.CompileModule(ctx, wasmBinary)
+	compiled, err := r.CompileModule(compileContext(ctx), wasmBinary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile wasm: %w", err)
 	}
@@ -329,7 +476,7 @@ func RunDebug(ctx context.Context, workFS fs.FS, args ...string) (out []byte, er
 			err = closeErr
 		}
 	}()
-	compiled, err := r.CompileModule(ctx, wasmBinary)
+	compiled, err := r.CompileModule(compileContext(ctx), wasmBinary)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile wasm: %w", err)
 	}
