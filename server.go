@@ -11,6 +11,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/lbe/go-exiftool-wasm/internal/guestarena"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/sys"
@@ -54,12 +55,16 @@ type Server struct {
 	restartErr error
 
 	mod      api.Module
+	arena    *guestarena.Arena
 	stdin    printer
 	stdout   *bufio.Scanner
 	stderr   *bufio.Scanner
 	stdinW   io.WriteCloser
-	stdoutR  io.Closer
-	stderrR  io.Closer
+	stdinR   io.ReadCloser
+	stdoutR  io.ReadCloser
+	stderrR  io.ReadCloser
+	evalCtx  context.Context
+	cancel   context.CancelFunc
 	evalDone chan struct{}
 	evalErr  error
 }
@@ -70,7 +75,7 @@ type Server struct {
 // same filesystem layout as [Command]: embedded Perl at "/" and the host working
 // directory overlaid, with [os.TempDir] mounted read-write.
 func NewServer(commonArg ...string) (*Server, error) {
-	r, err := newRuntime(context.Background())
+	r, err := newServerRuntime(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +128,15 @@ func closeAll(closers ...io.Closer) error {
 	return errors.Join(errs...)
 }
 
+func drainReader(r io.Reader) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, r)
+		close(done)
+	}()
+	return done
+}
+
 func closeModules(mods ...api.Closer) error {
 	var errs []error
 	for _, m := range mods {
@@ -135,9 +149,13 @@ func closeModules(mods ...api.Closer) error {
 
 func (e *Server) start() error {
 	e.mod = nil
+	e.arena = nil
 	e.stdinW = nil
+	e.stdinR = nil
 	e.stdoutR = nil
 	e.stderrR = nil
+	e.evalCtx = nil
+	e.cancel = nil
 	e.evalDone = nil
 	e.evalErr = nil
 
@@ -198,8 +216,25 @@ func (e *Server) start() error {
 		return fmt.Errorf("zeroperl_init returned %d", results[0])
 	}
 
+	mallocFn := mod.ExportedFunction("malloc")
+	freeFn := mod.ExportedFunction("free")
+	mem := mod.Memory()
+	if mallocFn == nil || freeFn == nil || mem == nil {
+		cleanup()
+		return fmt.Errorf("failed to bind guest memory exports")
+	}
+	arena := guestarena.NewWazero(mem, mallocFn, freeFn)
+	layout, err := guestarena.PackEvalData(context.Background(), arena, cachedWrappedExiftoolScript(), e.args)
+	if err != nil {
+		_ = arena.Close(context.Background())
+		cleanup()
+		return fmt.Errorf("failed to allocate script memory: %w", err)
+	}
+
 	e.mod = mod
+	e.arena = arena
 	e.stdinW = stdinW
+	e.stdinR = stdinR
 	e.stdoutR = stdoutR
 	e.stderrR = stderrR
 	e.stdin = printer{w: stdinW}
@@ -213,27 +248,20 @@ func (e *Server) start() error {
 	evalDone := make(chan struct{})
 	e.evalDone = evalDone
 	e.evalErr = nil
+	e.evalCtx, e.cancel = context.WithCancel(context.Background())
 
 	go func() {
+		ctx := e.evalCtx
 		defer close(evalDone)
+		defer func() {
+			if arena := e.arena; arena != nil {
+				_ = arena.Close(ctx)
+			}
+		}()
 		defer func() { _ = stdinW.Close() }()
 		defer func() { _ = stdoutW.Close() }()
 		defer func() { _ = stderrW.Close() }()
 		defer func() { _ = stdinR.Close() }()
-
-		mallocFn := mod.ExportedFunction("malloc")
-		freeFn := mod.ExportedFunction("free")
-		mem := mod.Memory()
-		ctx := context.Background()
-
-		scriptPtr, argvPtr, allocPtr, err := packGuestEvalData(ctx, mallocFn, freeFn, mem, cachedWrappedExiftoolScript(), e.args)
-		if err != nil {
-			e.evalErr = fmt.Errorf("failed to allocate script memory: %w", err)
-			return
-		}
-		defer func() {
-			_ = freeGuest(ctx, freeFn, allocPtr)
-		}()
 
 		evalFn := mod.ExportedFunction("zeroperl_eval")
 		if evalFn == nil {
@@ -241,7 +269,7 @@ func (e *Server) start() error {
 			return
 		}
 
-		_, err = evalFn.Call(ctx, uint64(scriptPtr), uint64(1), uint64(len(e.args)), uint64(argvPtr))
+		_, err = evalFn.Call(ctx, uint64(layout.ScriptPtr), uint64(1), uint64(len(e.args)), uint64(layout.ArgvPtr))
 		if err != nil {
 			var exitErr *sys.ExitError
 			if errors.As(err, &exitErr) {
@@ -254,18 +282,82 @@ func (e *Server) start() error {
 		}
 	}()
 
+	if err := e.awaitReady(); err != nil {
+		e.stop()
+		return err
+	}
+
+	return nil
+}
+
+func (e *Server) awaitReady() error {
+	if err := e.stdin.printExecute(nil, e.executeArg); err != nil {
+		return fmt.Errorf("failed to send startup readiness probe: %w", err)
+	}
+
+	if !e.stdout.Scan() {
+		err := e.stdout.Err()
+		if err == nil {
+			select {
+			case <-e.evalDone:
+				if e.evalErr != nil {
+					err = e.evalErr
+				} else {
+					err = fmt.Errorf("exiftool: server closed unexpectedly: %w", io.EOF)
+				}
+			default:
+				err = fmt.Errorf("exiftool: server closed unexpectedly: %w", io.EOF)
+			}
+		}
+		return fmt.Errorf("startup readiness probe stdout failed: %w", err)
+	}
+
+	if !e.stderr.Scan() {
+		err := e.stderr.Err()
+		if err == nil {
+			select {
+			case <-e.evalDone:
+				if e.evalErr != nil {
+					err = e.evalErr
+				} else {
+					err = fmt.Errorf("exiftool: server closed unexpectedly: %w", io.EOF)
+				}
+			default:
+				err = fmt.Errorf("exiftool: server closed unexpectedly: %w", io.EOF)
+			}
+		}
+		return fmt.Errorf("startup readiness probe stderr failed: %w", err)
+	}
+
+	if len(e.stderr.Bytes()) > 0 {
+		return errors.New("exiftool: " + string(bytes.TrimSpace(e.stderr.Bytes())))
+	}
+
 	return nil
 }
 
 func (e *Server) stop() {
+	var stdoutDone, stderrDone <-chan struct{}
+	if e.stdoutR != nil {
+		stdoutDone = drainReader(e.stdoutR)
+	}
+	if e.stderrR != nil {
+		stderrDone = drainReader(e.stderrR)
+	}
+	if e.stdinW != nil {
+		_ = e.stdin.print("-stay_open", "false")
+	}
+	if e.cancel != nil {
+		e.cancel()
+		e.cancel = nil
+	}
 	if e.stdinW != nil {
 		_ = e.stdinW.Close()
+		e.stdinW = nil
 	}
-	if e.mod != nil {
-		_ = e.mod.Close(context.Background())
-	}
-	if e.evalDone != nil {
-		<-e.evalDone
+	if e.stdinR != nil {
+		_ = e.stdinR.Close()
+		e.stdinR = nil
 	}
 	if e.stdoutR != nil {
 		_ = e.stdoutR.Close()
@@ -275,6 +367,21 @@ func (e *Server) stop() {
 		_ = e.stderrR.Close()
 		e.stderrR = nil
 	}
+	if e.evalDone != nil {
+		<-e.evalDone
+	}
+	if stdoutDone != nil {
+		<-stdoutDone
+	}
+	if stderrDone != nil {
+		<-stderrDone
+	}
+	if e.mod != nil && !e.mod.IsClosed() {
+		_ = e.mod.Close(context.Background())
+	}
+	e.mod = nil
+	e.evalCtx = nil
+	e.arena = nil
 }
 
 func (e *Server) restart() {
@@ -307,7 +414,12 @@ func (e *Server) Command(arg ...string) ([]byte, error) {
 		return nil, fmt.Errorf("server had a previous restart error: %w", err)
 	}
 
-	if err := e.stdin.printExecute(arg, e.executeArg); err != nil {
+	if e.arena == nil {
+		e.restart()
+		return nil, errors.New("exiftool: guest arena unavailable")
+	}
+
+	if err := e.stdin.write(e.arena.BuildExecutePayload(arg, e.executeArg)); err != nil {
 		e.restart()
 		return nil, err
 	}
@@ -377,15 +489,50 @@ func (e *Server) Close() error {
 	if e.done {
 		return nil
 	}
+	var stdoutDone, stderrDone <-chan struct{}
+	if e.stdoutR != nil {
+		stdoutDone = drainReader(e.stdoutR)
+	}
+	if e.stderrR != nil {
+		stderrDone = drainReader(e.stderrR)
+	}
+	if e.stdinW != nil {
+		_ = e.stdin.print("-stay_open", "false")
+	}
+	if e.cancel != nil {
+		e.cancel()
+		e.cancel = nil
+	}
 	if e.stdinW != nil {
 		_ = e.stdinW.Close()
+		e.stdinW = nil
 	}
-	if e.mod != nil {
-		_ = e.mod.Close(context.Background())
+	if e.stdinR != nil {
+		_ = e.stdinR.Close()
+		e.stdinR = nil
+	}
+	if e.stdoutR != nil {
+		_ = e.stdoutR.Close()
+		e.stdoutR = nil
+	}
+	if e.stderrR != nil {
+		_ = e.stderrR.Close()
+		e.stderrR = nil
 	}
 	if e.evalDone != nil {
 		<-e.evalDone
 	}
+	if stdoutDone != nil {
+		<-stdoutDone
+	}
+	if stderrDone != nil {
+		<-stderrDone
+	}
+	if e.mod != nil && !e.mod.IsClosed() {
+		_ = e.mod.Close(context.Background())
+	}
+	e.mod = nil
+	e.evalCtx = nil
 	return e.finalize()
 }
 

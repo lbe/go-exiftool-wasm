@@ -10,6 +10,14 @@ type printer struct {
 	err error
 }
 
+func (p *printer) write(v []byte) error {
+	if p.err != nil {
+		return p.err
+	}
+	_, p.err = p.w.Write(v)
+	return p.err
+}
+
 func (p *printer) print(lines ...string) error {
 	if p.err != nil {
 		return p.err
@@ -33,8 +41,7 @@ func (p *printer) print(lines ...string) error {
 		i++
 	}
 
-	_, p.err = p.w.Write(p.buf)
-	return p.err
+	return p.write(p.buf)
 }
 
 func (p *printer) printExecute(lines []string, execute string) error {
@@ -62,8 +69,7 @@ func (p *printer) printExecute(lines []string, execute string) error {
 	i += copy(p.buf[i:], execute)
 	p.buf[i] = '\n'
 
-	_, p.err = p.w.Write(p.buf)
-	return p.err
+	return p.write(p.buf)
 }
 
 func (p *printer) close() error {

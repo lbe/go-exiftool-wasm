@@ -9,6 +9,7 @@ For rebuilding `embed/` from upstream, see [README.md](README.md) (Development) 
 - Run **ExifTool** without `os/exec` or a host `exiftool` binary.
 - Ship **Perl**, **stdlib**, **Image::ExifTool**, and the **zeroperl** WASM module inside the Go module (`embed/`).
 - Offer **drop-in style** APIs: `Command`, `Run`, `NewServer` / `Server.Command`, plus helpers (`Unmarshal`, `printer`).
+- Reuse compiled WASM aggressively so repeat starts are much cheaper than the first start in a process and across processes.
 
 ## Layered stack
 
@@ -84,15 +85,24 @@ flowchart LR
 
 ## Wazero runtime setup
 
-`newRuntime`:
+`newRuntime` / `newServerRuntime`:
 
 1. Creates a **wazero.Runtime**.
 2. Instantiates a tiny **`env`** host module exporting **`call_host_function`** (stub returning `0`; required by the zeroperl build).
 3. Instantiates **`wasi_snapshot_preview1`** for filesystem and process syscalls.
+4. Reuses a shared **compilation cache**:
+   - in-memory for the current process
+   - optionally persistent on disk via `CacheDir` (defaulting to `os.UserCacheDir()` when available)
 
 Each **single-shot** `Command` / `Run` builds a **new** runtime, **compiles** `wasmBinary` once per call, **instantiates** one module, runs **`zeroperl_init`**, then invokes the guest entry that runs Perl with the embedded script and argv, then closes the module and runtime.
 
 **`Server`** compiles the WASM **once** at `NewServer`, keeps one **`wazero.CompiledModule`**, and uses **one long-lived instantiation** for all stay_open traffic (until restart/shutdown).
+
+The server runtime also enables a slightly different wazero configuration than the single-shot path:
+
+- `WithCloseOnContextDone(true)` so forced shutdown/restart can cancel the long-running eval cleanly
+- a fixed memory limit and `WithMemoryCapacityFromMax(true)` so the server's linear-memory backing is provisioned up front instead of being repeatedly reallocated under normal operation
+- the same shared compilation cache as the single-shot path
 
 ## Single-shot guest run (`evalModule` in exiftool.go)
 
@@ -121,7 +131,7 @@ sequenceDiagram
 Implementation notes (see source in `exiftool.go`):
 
 - **Script body**: `scriptPreamble` + `exiftoolScript` (copied into WASM with a trailing NUL).
-- **Arguments**: Guest **`malloc`** per string, **`argv`** as `uint32` pointers, freed after the guest returns.
+- **Arguments**: The script, argv table, and argument strings are packed into a single guest allocation instead of one guest allocation per string.
 - **Success on `exit(0)`**: Perl’s `exit(0)` surfaces as **`sys.ExitError`** in wazero; non-zero exit and other errors are wrapped and may attach **stderr** text.
 - The guest entry symbol name is **`zeroperl_eval`** (exported by zeroperl).
 
@@ -180,16 +190,19 @@ Startup:
 
 1. **Pipes** connect host writers/readers to the module’s stdin/stdout/stderr (host **`stdinW`** receives command lines for the guest).
 2. **`zeroperl_init`** on the main setup path.
-3. A **dedicated goroutine** invokes **`zeroperl_eval` once** with the full stay_open argv; that call **blocks** until ExifTool exits (normal shutdown or error). While blocked, ExifTool reads **stdin** for `-execute` lines and writes **stdout/stderr**.
-4. **`evalDone`** (channel) is closed when that goroutine finishes, signaling end of life.
+3. Startup script + argv packing uses a per-server **guest arena** (`internal/guestarena`) so restart uses one reusable packing strategy instead of ad-hoc guest allocations.
+4. A **dedicated goroutine** invokes **`zeroperl_eval` once** with the full stay_open argv; that call **blocks** until ExifTool exits (normal shutdown or error). While blocked, ExifTool reads **stdin** for `-execute` lines and writes **stdout/stderr**.
+5. A startup **readiness probe** performs one empty `-execute` round trip before the server is exposed to callers.
+6. **`evalDone`** (channel) is closed when that goroutine finishes, signaling end of life.
 
 Per-request **`Server.Command`** (under **`cmdMtx`**):
 
-1. **`printer.print`** writes each argument as a line, then **`-execute<boundary>`**.
-2. **`bufio.Scanner`** with **`splitReadyToken`** reads one framed chunk from stdout and one from stderr (delimiter **`{ready1854673209}\n`**).
-3. Non-empty stderr chunk → error; else return a **copy** of stdout bytes.
+1. The server reuses its arena-owned **host scratch buffer** to build one newline-delimited payload containing all arguments plus **`-execute<boundary>`**.
+2. **`printer.write`** sends that payload to stdin as a single write.
+3. **`bufio.Scanner`** with **`splitReadyToken`** reads one framed chunk from stdout and one from stderr (delimiter **`{ready1854673209}\n`**).
+4. Non-empty stderr chunk → error; else return a **copy** of stdout bytes.
 
-**`Shutdown`** sends **`-stay_open false`**, closes the printer, waits on **`evalDone`**, then **`finalize`** (mark done, close pipe readers, close runtime). **`Close`** forces teardown without the polite stay_open line.
+**`Shutdown`** sends **`-stay_open false`**, closes the printer, waits on **`evalDone`**, then **`finalize`** (mark done, close pipe readers, close runtime). **`Close`** forces teardown without the polite stay_open line. Both paths cancel the eval context before waiting so forced teardown and restart do not race the long-running WASM call.
 
 ## Concurrency
 
@@ -201,10 +214,11 @@ Per-request **`Server.Command`** (under **`cmdMtx`**):
 
 | File | Responsibility |
 |------|----------------|
-| `exiftool.go` | Embed directives, overlay/devNull/perl FS, `newRuntime`, single-shot module run, `Run` / `RunDebug`. |
+| `exiftool.go` | Embed directives, overlay/devNull/perl FS, shared runtime/cache setup, single-shot module run, `Run` / `RunDebug`. |
 | `cmd.go` | `Command` / `CommandContext` wiring. |
-| `server.go` | `Server`, pipes, stay_open goroutine, `splitReadyToken`, shutdown/finalize. |
+| `server.go` | `Server`, pipes, stay_open goroutine, readiness probe, restart/shutdown lifecycle, `splitReadyToken`. |
 | `printer.go` | Buffered newline writes and sticky error for server stdin. |
+| `internal/guestarena/` | Guest-memory arena used for startup/restart packing and reusable command payload scratch space. |
 | `init.go` | Package doc and `Exec` / `Arg1` / `Config`. |
 | `decode.go` | `Unmarshal` for line-oriented ExifTool text output. |
 

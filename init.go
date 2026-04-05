@@ -1,6 +1,7 @@
-// Package exiftool runs ExifTool in-process via an embedded Perl interpreter (zeroperl)
-// compiled to WebAssembly and executed with wazero. No external exiftool binary or
-// Perl installation is required.
+// Package exiftool runs ExifTool in-process via an embedded Perl interpreter
+// (zeroperl) compiled to WebAssembly and executed with wazero. It is published
+// from github.com/lbe/go-exiftool-wasm and does not require an external
+// exiftool binary or Perl installation.
 //
 // Entry points:
 //   - [Command] / [CommandContext]: one-shot invocation; host paths are relative to
@@ -50,14 +51,14 @@ func defaultCacheDir() string {
 	if err != nil || dir == "" {
 		return ""
 	}
-	return dir + string(os.PathSeparator) + "go-exiftool"
+	return dir + string(os.PathSeparator) + "go-exiftool-wasm"
 }
 
 func resolvedCacheDir() string {
-	switch dir := CacheDir; {
-	case dir == "":
+	switch dir := CacheDir; dir {
+	case "":
 		return defaultCacheDir()
-	case dir == "off" || dir == "OFF" || dir == "Off":
+	case "off", "OFF", "Off":
 		return ""
 	default:
 		return dir

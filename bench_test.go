@@ -4,15 +4,26 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
 const helperProcessModeEnv = "GO_EXIFTOOL_HELPER_PROCESS_MODE"
 const helperProcessCacheDirEnv = "GO_EXIFTOOL_HELPER_CACHE_DIR"
 const helperProcessWorkersEnv = runtimeWorkersEnv
+
+// benchmarkParallelServerSink keeps the writer-side work observable so the
+// compiler cannot eliminate it from BenchmarkServer_ParallelMixedRead.
+var benchmarkParallelServerSink struct {
+	sum   uint64
+	count uint64
+}
 
 func TestHelperProcess(t *testing.T) {
 	mode := os.Getenv(helperProcessModeEnv)
@@ -565,7 +576,7 @@ func BenchmarkServerCommand_MediumJPG_AllTags(b *testing.B) {
 	}
 }
 
-// BenchmarkServerCommand_LargeJPG reads a 133KB JPEG via warm server.
+// BenchmarkServerCommand_LargeJPG_AllTags reads all tags from a 133KB JPEG via warm server.
 func BenchmarkServerCommand_LargeJPG_AllTags(b *testing.B) {
 	e, err := NewServer()
 	if err != nil {
@@ -581,7 +592,7 @@ func BenchmarkServerCommand_LargeJPG_AllTags(b *testing.B) {
 	}
 }
 
-// BenchmarkServerCommand_PNG reads a 284B PNG via warm server.
+// BenchmarkServerCommand_PNG_AllTags reads all tags from a 284B PNG via warm server.
 func BenchmarkServerCommand_PNG_AllTags(b *testing.B) {
 	e, err := NewServer()
 	if err != nil {
@@ -597,7 +608,7 @@ func BenchmarkServerCommand_PNG_AllTags(b *testing.B) {
 	}
 }
 
-// BenchmarkServerCommand_TIFF reads a 60KB TIFF via warm server.
+// BenchmarkServerCommand_TIFF_AllTags reads all tags from a 60KB TIFF via warm server.
 func BenchmarkServerCommand_TIFF_AllTags(b *testing.B) {
 	e, err := NewServer()
 	if err != nil {
@@ -611,4 +622,106 @@ func BenchmarkServerCommand_TIFF_AllTags(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// BenchmarkServer_ParallelMixedRead simulates the bulk-ingest pattern: one
+// persistent server per worker goroutine, mixed image types, and a single
+// channel-driven writer that consumes results.
+func BenchmarkServer_ParallelMixedRead(b *testing.B) {
+	type job struct {
+		args []string
+	}
+	type result struct {
+		idx int
+		out []byte
+	}
+
+	jobs := []job{
+		{args: []string{"-json", "testdata/base.jpg"}},
+		{args: []string{"-json", "testdata/sample.jpg"}},
+		{args: []string{"-json", "testdata/sample_gps.jpg"}},
+		{args: []string{"-json", "testdata/sample.png"}},
+		{args: []string{"-json", "testdata/sample.tiff"}},
+		{args: []string{"-json", "testdata/test.jpg"}},
+		{args: []string{"testdata/sample.jpg"}},
+		{args: []string{"testdata/sample_gps.jpg"}},
+	}
+
+	workers := max(runtime.GOMAXPROCS(0)-2, 1)
+	servers := make([]*Server, 0, workers)
+	for i := 0; i < workers; i++ {
+		e, err := NewServer()
+		if err != nil {
+			for _, srv := range servers {
+				_ = srv.Shutdown()
+			}
+			b.Fatal(err)
+		}
+		servers = append(servers, e)
+	}
+	defer func() {
+		for _, srv := range servers {
+			_ = srv.Shutdown()
+		}
+	}()
+
+	results := make(chan result, workers*2)
+	errCh := make(chan error, workers)
+	done := make(chan struct{})
+
+	var sinkWG sync.WaitGroup
+	sinkWG.Add(1)
+	go func() {
+		defer sinkWG.Done()
+		h := fnv.New64a()
+		var count uint64
+		for res := range results {
+			_, _ = h.Write([]byte{byte(res.idx)})
+			_, _ = h.Write(res.out)
+			count++
+		}
+		benchmarkParallelServerSink.sum = h.Sum64()
+		benchmarkParallelServerSink.count = count
+		close(done)
+	}()
+
+	var next uint64
+	var workerWG sync.WaitGroup
+	workerWG.Add(workers)
+
+	b.ResetTimer()
+	for workerID := 0; workerID < workers; workerID++ {
+		srv := servers[workerID]
+		go func() {
+			defer workerWG.Done()
+			for {
+				i := int(atomic.AddUint64(&next, 1) - 1)
+				if i >= b.N {
+					return
+				}
+				job := jobs[i%len(jobs)]
+				out, err := srv.Command(job.args...)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				results <- result{idx: i % len(jobs), out: out}
+			}
+		}()
+	}
+
+	workerWG.Wait()
+	close(results)
+	sinkWG.Wait()
+	b.StopTimer()
+
+	select {
+	case err := <-errCh:
+		b.Fatal(err)
+	default:
+	}
+	<-done
 }

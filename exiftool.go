@@ -37,6 +37,7 @@ const (
 	runtimeModeEnv      = "GO_EXIFTOOL_WAZERO_RUNTIME_MODE"
 	runtimeDebugInfoEnv = "GO_EXIFTOOL_WAZERO_DEBUG_INFO"
 	runtimeWorkersEnv   = "GO_EXIFTOOL_WAZERO_COMPILATION_WORKERS"
+	serverMemoryPages   = 4096
 )
 
 type runtimeConfigKey struct {
@@ -44,6 +45,15 @@ type runtimeConfigKey struct {
 	mode               string
 	debugInfoEnabled   bool
 	compilationWorkers int
+	closeOnContextDone bool
+	memoryLimitPages   uint32
+	memoryCapacityMax  bool
+}
+
+type runtimeOptions struct {
+	closeOnContextDone bool
+	memoryLimitPages   uint32
+	memoryCapacityMax  bool
 }
 
 var (
@@ -79,12 +89,15 @@ func runtimeDebugInfoEnabled() bool {
 	return os.Getenv(runtimeDebugInfoEnv) == "1"
 }
 
-func runtimeConfigKeyForProcess() runtimeConfigKey {
+func runtimeConfigKeyForProcess(opts runtimeOptions) runtimeConfigKey {
 	return runtimeConfigKey{
 		cacheDir:           resolvedCacheDir(),
 		mode:               runtimeConfigMode(),
 		debugInfoEnabled:   runtimeDebugInfoEnabled(),
 		compilationWorkers: runtimeCompilationWorkers(),
+		closeOnContextDone: opts.closeOnContextDone,
+		memoryLimitPages:   opts.memoryLimitPages,
+		memoryCapacityMax:  opts.memoryCapacityMax,
 	}
 }
 
@@ -114,7 +127,17 @@ func buildRuntimeConfig(key runtimeConfigKey) wazero.RuntimeConfig {
 			cache = persistentCache
 		}
 	}
-	return config.WithCompilationCache(cache)
+	config = config.WithCompilationCache(cache)
+	if key.memoryLimitPages > 0 {
+		config = config.WithMemoryLimitPages(key.memoryLimitPages)
+	}
+	if key.memoryCapacityMax {
+		config = config.WithMemoryCapacityFromMax(true)
+	}
+	if key.closeOnContextDone {
+		config = config.WithCloseOnContextDone(true)
+	}
+	return config
 }
 
 // overlayFS implements [fs.FS] by opening name on each layer in order until one succeeds.
@@ -203,7 +226,19 @@ func defaultRootFS() fs.FS {
 
 // newRuntime builds a wazero runtime with the zeroperl env import stub and WASI snapshot1.
 func newRuntime(ctx context.Context) (wazero.Runtime, error) {
-	key := runtimeConfigKeyForProcess()
+	return newRuntimeWithOptions(ctx, runtimeOptions{})
+}
+
+func newServerRuntime(ctx context.Context) (wazero.Runtime, error) {
+	return newRuntimeWithOptions(ctx, runtimeOptions{
+		closeOnContextDone: true,
+		memoryLimitPages:   serverMemoryPages,
+		memoryCapacityMax:  true,
+	})
+}
+
+func newRuntimeWithOptions(ctx context.Context, opts runtimeOptions) (wazero.Runtime, error) {
+	key := runtimeConfigKeyForProcess(opts)
 	runtimeConfigAny, _ := runtimeConfigs.LoadOrStore(key, buildRuntimeConfig(key))
 	runtimeConfig := runtimeConfigAny.(wazero.RuntimeConfig)
 	r := wazero.NewRuntimeWithConfig(ctx, runtimeConfig)
@@ -262,34 +297,6 @@ func mallocGuest(ctx context.Context, mallocFn api.Function, size int) (uint32, 
 func freeGuest(ctx context.Context, freeFn api.Function, ptr uint32) error {
 	_, err := freeFn.Call(ctx, uint64(ptr))
 	return err
-}
-
-func writeGuestCString(ctx context.Context, mallocFn, freeFn api.Function, mem api.Memory, s string) (uint32, error) {
-	ptr, err := mallocGuest(ctx, mallocFn, len(s)+1)
-	if err != nil {
-		return 0, err
-	}
-	if !mem.WriteString(ptr, s) || !mem.WriteByte(ptr+uint32(len(s)), 0) {
-		if freeErr := freeGuest(ctx, freeFn, ptr); freeErr != nil {
-			return 0, fmt.Errorf("failed to write %d-byte string at address %d (free also failed: %w)", len(s), ptr, freeErr)
-		}
-		return 0, fmt.Errorf("failed to write %d-byte string at address %d", len(s), ptr)
-	}
-	return ptr, nil
-}
-
-func writeGuestNULTerminatedBytes(ctx context.Context, mallocFn, freeFn api.Function, mem api.Memory, b []byte) (uint32, error) {
-	ptr, err := mallocGuest(ctx, mallocFn, len(b)+1)
-	if err != nil {
-		return 0, err
-	}
-	if !mem.Write(ptr, b) || !mem.WriteByte(ptr+uint32(len(b)), 0) {
-		if freeErr := freeGuest(ctx, freeFn, ptr); freeErr != nil {
-			return 0, fmt.Errorf("failed to write %d bytes at address %d (free also failed: %w)", len(b), ptr, freeErr)
-		}
-		return 0, fmt.Errorf("failed to write %d bytes at address %d", len(b), ptr)
-	}
-	return ptr, nil
 }
 
 func alignGuestOffset(offset, align uint32) uint32 {

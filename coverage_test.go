@@ -170,11 +170,11 @@ func TestServerCommandAfterKill(t *testing.T) {
 	t.Logf("Before kill: %s", bytes.TrimSpace(out))
 
 	// Kill the underlying process to trigger restart path
-	if err := e.cmd.Process.Kill(); err != nil {
-		t.Logf("Kill error: %v", err)
+	if killErr := e.cmd.Process.Kill(); killErr != nil {
+		t.Logf("Kill error: %v", killErr)
 	}
-	if err := e.cmd.Process.Release(); err != nil {
-		t.Logf("Release error: %v", err)
+	if releaseErr := e.cmd.Process.Release(); releaseErr != nil {
+		t.Logf("Release error: %v", releaseErr)
 	}
 
 	// The next command should trigger a restart attempt
