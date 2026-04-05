@@ -37,6 +37,35 @@ func (p *printer) print(lines ...string) error {
 	return p.err
 }
 
+func (p *printer) printExecute(lines []string, execute string) error {
+	if p.err != nil {
+		return p.err
+	}
+
+	n := len(execute) + 1
+	for _, l := range lines {
+		n += len(l) + 1
+	}
+
+	if cap(p.buf) < n {
+		p.buf = make([]byte, n, n*2)
+	} else {
+		p.buf = p.buf[:n]
+	}
+
+	i := 0
+	for _, l := range lines {
+		i += copy(p.buf[i:], l)
+		p.buf[i] = '\n'
+		i++
+	}
+	i += copy(p.buf[i:], execute)
+	p.buf[i] = '\n'
+
+	_, p.err = p.w.Write(p.buf)
+	return p.err
+}
+
 func (p *printer) close() error {
 	err := p.w.Close()
 	if p.err == nil {

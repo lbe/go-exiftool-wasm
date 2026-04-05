@@ -48,6 +48,7 @@ type Server struct {
 	compiled   wazero.CompiledModule
 	rootFS     fs.FS
 	args       []string
+	executeArg string
 	done       bool
 	cmd        *cmdStub
 	restartErr error
@@ -101,6 +102,7 @@ func NewServer(commonArg ...string) (*Server, error) {
 		"-charset", "filename=utf8",
 	)
 	e.args = append(e.args, commonArg...)
+	e.executeArg = "-execute" + boundary
 
 	if err := e.start(); err != nil {
 		if closeErr := r.Close(context.Background()); closeErr != nil {
@@ -203,6 +205,8 @@ func (e *Server) start() error {
 	e.stdin = printer{w: stdinW}
 	e.stdout = bufio.NewScanner(stdoutR)
 	e.stderr = bufio.NewScanner(stderrR)
+	e.stdout.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
+	e.stderr.Buffer(make([]byte, 0, 4*1024), 4*1024*1024)
 	e.stdout.Split(splitReadyToken)
 	e.stderr.Split(splitReadyToken)
 
@@ -303,11 +307,7 @@ func (e *Server) Command(arg ...string) ([]byte, error) {
 		return nil, fmt.Errorf("server had a previous restart error: %w", err)
 	}
 
-	if err := e.stdin.print(arg...); err != nil {
-		e.restart()
-		return nil, err
-	}
-	if err := e.stdin.print("-execute" + boundary); err != nil {
+	if err := e.stdin.printExecute(arg, e.executeArg); err != nil {
 		e.restart()
 		return nil, err
 	}
