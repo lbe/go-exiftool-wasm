@@ -1,6 +1,6 @@
 // Package exiftool runs ExifTool in-process via an embedded Perl interpreter (zeroperl)
-// compiled to WebAssembly and executed with wazero. No external exiftool binary or
-// Perl installation is required.
+// generated to native Go via wasm2go with a custom WASI host layer. No external
+// exiftool binary or Perl installation is required.
 //
 // Entry points:
 //   - [Command] / [CommandContext]: one-shot invocation; host paths are relative to

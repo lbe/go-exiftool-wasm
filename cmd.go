@@ -7,10 +7,18 @@ import (
 	"os"
 )
 
+// Command runs a single ExifTool invocation. Host paths are visible read-only
+// under "/" inside the sandbox and [os.TempDir] is mounted read-write for any
+// side effects ExifTool needs to perform. stdin is forwarded to ExifTool's
+// standard input; pass nil if no input is required.
+//
+// It uses [context.Background]; for cancellation see [CommandContext].
 func Command(stdin io.Reader, arg ...string) ([]byte, error) {
 	return CommandContext(context.Background(), stdin, arg...)
 }
 
+// CommandContext is like [Command] but respects context cancellation. If ctx
+// is already done when the call begins, it returns ctx.Err immediately.
 func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []byte, err error) {
 	select {
 	case <-ctx.Done():

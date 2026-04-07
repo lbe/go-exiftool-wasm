@@ -10,12 +10,18 @@ import (
 	"io/fs"
 	"os"
 	"sync"
+	"time"
 
 	wasm2go "github.com/lbe/go-exiftool/zeroperl"
 )
 
+// boundary is the unique token used in the ExifTool -stay_open protocol to
+// delimit command responses. It appears in -echo4 "{ready<boundary>}" output
+// and -execute<boundary> input framing.
 const boundary = "1854673209"
 
+// processStub adapts Server to the process-like interface expected by the
+// original go-exiftool API. Killing the stub closes the server's stdin pipe.
 type processStub struct {
 	server *Server
 }
@@ -31,10 +37,19 @@ func (p *processStub) Release() error {
 	return nil
 }
 
+// cmdStub is a minimal shim satisfying the cmd-like interface required by the
+// legacy go-exiftool compatibility layer.
 type cmdStub struct {
 	Process *processStub
 }
 
+// Server is a persistent, in-process ExifTool instance using the -stay_open
+// protocol. It amortises the one-time Perl/ExifTool startup cost across many
+// [Server.Command] calls. Concurrency safety: Command calls are serialised
+// internally; lifecycle methods (Close, Shutdown) may be called concurrently.
+//
+// Use [NewServer] to create an instance and call [Server.Shutdown] or
+// [Server.Close] when finished to release resources.
 type Server struct {
 	srvMtx     sync.Mutex
 	cmdMtx     sync.Mutex
@@ -54,6 +69,9 @@ type Server struct {
 	evalErr  error
 }
 
+// serverIO is the GuestIO adapter for Server mode. It uses real os.Pipe pairs
+// for stdin and stdout so that the long-running zeroperl eval goroutine can
+// stream data to/from the Server.Command caller. stderr is captured in-memory.
 type serverIO struct {
 	stdinR   *os.File
 	stdinW   *os.File
@@ -125,6 +143,11 @@ func closeAll(closers ...io.Closer) error {
 	return errors.Join(errs...)
 }
 
+// NewServer starts a persistent ExifTool process using -stay_open true.
+// commonArg is prepended to every subsequent [Server.Command] invocation
+// (for example "-fast", "-api", "LargeFileSupport=1").
+// The package-level [Arg1] and [Config] variables are also included.
+// Call [Server.Shutdown] or [Server.Close] when done to release resources.
 func NewServer(commonArg ...string) (*Server, error) {
 	e := &Server{
 		rootFS: defaultRootFS(),
@@ -258,10 +281,17 @@ func (e *Server) start() error {
 
 func (e *Server) stop() {
 	if e.stdinW != nil {
+		_, _ = fmt.Fprint(e.stdinW, "-stay_open\nfalse\n")
 		_ = e.stdinW.Close()
 	}
+	if e.sio != nil {
+		e.sio.CloseStdin()
+	}
 	if e.evalDone != nil {
-		<-e.evalDone
+		select {
+		case <-e.evalDone:
+		case <-time.After(2 * time.Second):
+		}
 	}
 	if e.stdoutR != nil {
 		_ = e.stdoutR.Close()
@@ -279,6 +309,10 @@ func (e *Server) restart() {
 	e.restartErr = e.start()
 }
 
+// Command sends one ExifTool command via the stay_open protocol and blocks
+// until the response (delimited by the {ready} token) is received. If
+// ExifTool writes to stderr, it is returned as an error and the response is
+// nil. On any I/O failure the server restarts automatically.
 func (e *Server) Command(arg ...string) ([]byte, error) {
 	e.cmdMtx.Lock()
 	defer e.cmdMtx.Unlock()
@@ -351,21 +385,25 @@ func (e *Server) finalize() error {
 	return nil
 }
 
+// Close forcibly stops the server. It sends stay_open false, waits up to two
+// seconds for the eval goroutine to finish, then releases resources. It is
+// safe to call Close multiple times.
 func (e *Server) Close() error {
 	e.srvMtx.Lock()
 	defer e.srvMtx.Unlock()
 	if e.done {
 		return nil
 	}
-	if e.stdinW != nil {
-		_ = e.stdinW.Close()
-	}
-	if e.evalDone != nil {
-		<-e.evalDone
-	}
+	e.stop()
 	return e.finalize()
 }
 
+// Shutdown performs a graceful shutdown: it sends the stay_open false signal,
+// closes stdin, and waits for the eval goroutine to complete before releasing
+// resources. Unlike [Server.Close], Shutdown blocks until the Perl interpreter
+// has finished processing.
+//
+// Returns an error if called after the server is already closed.
 func (e *Server) Shutdown() error {
 	e.cmdMtx.Lock()
 	defer e.cmdMtx.Unlock()
@@ -391,6 +429,9 @@ func (e *Server) Shutdown() error {
 	return e.finalize()
 }
 
+// splitReadyToken is a bufio.SplitFunc that scans until the ExifTool
+// "{ready<boundary>}" response token followed by a newline. The token and
+// newline are consumed but not included in the returned token data.
 func splitReadyToken(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if i := bytes.Index(data, []byte("{ready"+boundary+"}")); i >= 0 {
 		if n := bytes.IndexByte(data[i:], '\n'); n >= 0 {
