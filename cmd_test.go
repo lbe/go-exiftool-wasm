@@ -226,6 +226,8 @@ func TestCommandContextTimeout(t *testing.T) {
 }
 
 func TestCommandWriteTag(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	// Create a temp copy of sample.jpg
 	src, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
@@ -234,8 +236,8 @@ func TestCommandWriteTag(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "write_test.jpg")
-	if err := os.WriteFile(tmpFile, src, 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(tmpFile, src, 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	// Write a new tag
@@ -261,6 +263,8 @@ func TestCommandWriteTag(t *testing.T) {
 }
 
 func TestCommandDeleteTag(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	src, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -268,8 +272,8 @@ func TestCommandDeleteTag(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "delete_test.jpg")
-	if err := os.WriteFile(tmpFile, src, 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(tmpFile, src, 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	// Delete the Artist tag
@@ -295,6 +299,8 @@ func TestCommandDeleteTag(t *testing.T) {
 }
 
 func TestCommandCopyTags(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	src, err := os.ReadFile("testdata/sample_noexif.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -302,8 +308,8 @@ func TestCommandCopyTags(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	dstFile := filepath.Join(tmpDir, "copy_dst.jpg")
-	if err := os.WriteFile(dstFile, src, 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(dstFile, src, 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	// Copy tags from sample.jpg to the no-exif file

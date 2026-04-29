@@ -3,7 +3,7 @@ package exiftool
 import (
 	"bufio"
 	"bytes"
-	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,14 +11,16 @@ import (
 	"os"
 	"sync"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/sys"
+	wasm2go "github.com/lbe/go-exiftool-wasm/zeroperl"
 )
 
+// boundary is the unique token used in the ExifTool -stay_open protocol to
+// delimit command responses. It appears in -echo4 "{ready<boundary>}" output
+// and -execute<boundary> input framing.
 const boundary = "1854673209"
 
-// processStub and cmdStub mimic a small part of [os.Process] for tests that simulate kill/release.
+// processStub adapts Server to the process-like interface expected by the
+// original go-exiftool API. Killing the stub closes the server's stdin pipe.
 type processStub struct {
 	server *Server
 }
@@ -34,57 +36,121 @@ func (p *processStub) Release() error {
 	return nil
 }
 
+// cmdStub is a minimal shim satisfying the cmd-like interface required by the
+// legacy go-exiftool compatibility layer.
 type cmdStub struct {
 	Process *processStub
 }
 
-// Server keeps one ExifTool instance (embedded zeroperl WASM module) alive and
-// exchanges commands using ExifTool's -stay_open protocol. [Server.Command] may be
-// called from multiple goroutines; commands are serialized internally.
+// Server is a persistent, in-process ExifTool instance using the -stay_open
+// protocol. It amortises the one-time Perl/ExifTool startup cost across many
+// [Server.Command] calls. Concurrency safety: Command calls are serialised
+// internally; lifecycle methods (Close, Shutdown) may be called concurrently.
+//
+// Use [NewServer] to create an instance and call [Server.Shutdown] or
+// [Server.Close] when finished to release resources.
 type Server struct {
 	srvMtx     sync.Mutex
 	cmdMtx     sync.Mutex
-	runtime    wazero.Runtime
-	compiled   wazero.CompiledModule
 	rootFS     fs.FS
 	args       []string
 	done       bool
 	cmd        *cmdStub
 	restartErr error
 
-	mod      api.Module
-	stdin    printer
-	stdout   *bufio.Scanner
-	stderr   *bufio.Scanner
+	mod      *wasm2go.Module
+	wasi     *wasiState
 	stdinW   io.WriteCloser
 	stdoutR  io.Closer
-	stderrR  io.Closer
+	stdout   *bufio.Scanner
+	sio      *serverIO
 	evalDone chan struct{}
 	evalErr  error
 }
 
-// NewServer compiles and starts ExifTool in stay_open mode. Arguments in commonArg
-// are appended after built-in options (-stay_open, -@ -, -common_args, ready echo);
-// package-level [Arg1] and [Config] are applied when non-empty. The server uses the
-// same filesystem layout as [Command]: embedded Perl at "/" and the host working
-// directory overlaid, with [os.TempDir] mounted read-write.
-func NewServer(commonArg ...string) (*Server, error) {
-	r, err := newRuntime(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	compiled, err := r.CompileModule(context.Background(), wasmBinary)
-	if err != nil {
-		if closeErr := r.Close(context.Background()); closeErr != nil {
-			return nil, fmt.Errorf("failed to compile wasm: %w (close error: %v)", err, closeErr)
-		}
-		return nil, err
-	}
+// serverIO is the [GuestIO] adapter for Server mode. It uses real [os.Pipe]
+// pairs for stdin and stdout so that the long-running zeroperl eval goroutine
+// can stream data to/from [Server.Command] callers. stderr is captured
+// in-memory and drained on each command for error reporting.
+type serverIO struct {
+	stdinR   *os.File
+	stdinW   *os.File
+	stdoutR  *os.File
+	stdoutW  *os.File
+	stderrB  bytes.Buffer
+	stderrMu sync.Mutex
+}
 
+func newServerIO() (*serverIO, error) {
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		stdinR.Close()
+		stdinW.Close()
+		return nil, err
+	}
+	return &serverIO{
+		stdinR: stdinR, stdinW: stdinW,
+		stdoutR: stdoutR, stdoutW: stdoutW,
+	}, nil
+}
+
+func (s *serverIO) ReadStdin(buf []byte) (int, error) {
+	return s.stdinR.Read(buf)
+}
+
+func (s *serverIO) WriteStdout(buf []byte) (int, error) {
+	return s.stdoutW.Write(buf)
+}
+
+func (s *serverIO) WriteStderr(buf []byte) (int, error) {
+	s.stderrMu.Lock()
+	defer s.stderrMu.Unlock()
+	return s.stderrB.Write(buf)
+}
+
+func (s *serverIO) CloseStdin() {
+	s.stdinR.Close()
+}
+
+func (s *serverIO) CloseAll() {
+	s.stdinR.Close()
+	s.stdoutW.Close()
+}
+
+func (s *serverIO) DrainStderr(from int) []byte {
+	s.stderrMu.Lock()
+	defer s.stderrMu.Unlock()
+	b := s.stderrB.Bytes()
+	if from >= len(b) {
+		return nil
+	}
+	result := make([]byte, len(b)-from)
+	copy(result, b[from:])
+	return result
+}
+
+func closeAll(closers ...io.Closer) error {
+	var errs []error
+	for _, c := range closers {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// NewServer starts a persistent ExifTool process using -stay_open true.
+// commonArg is prepended to every subsequent [Server.Command] invocation
+// (for example "-fast", "-api", "LargeFileSupport=1").
+// The package-level [Arg1] and [Config] variables are also included.
+// Call [Server.Shutdown] or [Server.Close] when done to release resources.
+func NewServer(commonArg ...string) (*Server, error) {
 	e := &Server{
-		runtime:  r,
-		compiled: compiled,
-		rootFS:   defaultRootFS(),
+		rootFS: defaultRootFS(),
 	}
 	e.cmd = &cmdStub{Process: &processStub{server: e}}
 
@@ -103,108 +169,65 @@ func NewServer(commonArg ...string) (*Server, error) {
 	e.args = append(e.args, commonArg...)
 
 	if err := e.start(); err != nil {
-		if closeErr := r.Close(context.Background()); closeErr != nil {
-			return nil, fmt.Errorf("start failed: %w (close error: %v)", err, closeErr)
-		}
 		return nil, err
 	}
 	return e, nil
 }
 
-func closeAll(closers ...io.Closer) error {
-	var errs []error
-	for _, c := range closers {
-		if err := c.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func closeModules(mods ...api.Closer) error {
-	var errs []error
-	for _, m := range mods {
-		if err := m.Close(context.Background()); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
 func (e *Server) start() error {
 	e.mod = nil
+	e.wasi = nil
 	e.stdinW = nil
 	e.stdoutR = nil
-	e.stderrR = nil
+	e.sio = nil
 	e.evalDone = nil
 	e.evalErr = nil
 
-	stdinR, stdinW, err := os.Pipe()
+	sio, err := newServerIO()
 	if err != nil {
-		return fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-	stdoutR, stdoutW, err := os.Pipe()
-	if err != nil {
-		_ = closeAll(stdinR, stdinW)
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-	stderrR, stderrW, err := os.Pipe()
-	if err != nil {
-		_ = closeAll(stdinR, stdinW, stdoutR, stdoutW)
-		return fmt.Errorf("failed to create stderr pipe: %w", err)
+		return fmt.Errorf("failed to create pipes: %w", err)
 	}
 
-	devFS := devNullFS{}
-	fsConfig := wazero.NewFSConfig().
-		WithFSMount(e.rootFS, "/").
-		WithFSMount(devFS, "/dev").
-		WithDirMount(os.TempDir(), os.TempDir())
-
-	config := wazero.NewModuleConfig().
-		WithStdin(stdinR).
-		WithStdout(stdoutW).
-		WithStderr(stderrW).
-		WithName("zeroperl").
-		WithArgs("zeroperl").
-		WithStartFunctions().
-		WithEnv("PERL5LIB", "/lib/5.42.0:/lib/5.42.0/wasm32-wasi").
-		WithFSConfig(fsConfig)
-
-	mod, err := e.runtime.InstantiateModule(context.Background(), e.compiled, config)
+	mod, ws, err := newModule(sio, e.rootFS, nil, []string{os.TempDir()})
 	if err != nil {
-		_ = closeAll(stdinR, stdinW, stdoutR, stdoutW, stderrR, stderrW)
-		return fmt.Errorf("wasm instantiate failed: %w", err)
-	}
-
-	cleanup := func() {
-		_ = closeModules(mod)
-		_ = closeAll(stdinR, stdinW, stdoutR, stdoutW, stderrR, stderrW)
-	}
-
-	initFn := mod.ExportedFunction("zeroperl_init")
-	if initFn == nil {
-		cleanup()
-		return fmt.Errorf("zeroperl_init not found")
-	}
-	results, err := initFn.Call(context.Background())
-	if err != nil {
-		cleanup()
-		return fmt.Errorf("zeroperl_init failed: %w", err)
-	}
-	if results[0] != 0 {
-		cleanup()
-		return fmt.Errorf("zeroperl_init returned %d", results[0])
+		_ = closeAll(sio.stdinR, sio.stdinW, sio.stdoutR, sio.stdoutW)
+		return fmt.Errorf("failed to create module: %w", err)
 	}
 
 	e.mod = mod
-	e.stdinW = stdinW
-	e.stdoutR = stdoutR
-	e.stderrR = stderrR
-	e.stdin = printer{w: stdinW}
-	e.stdout = bufio.NewScanner(stdoutR)
-	e.stderr = bufio.NewScanner(stderrR)
+	e.wasi = ws
+	e.stdinW = sio.stdinW
+	e.stdoutR = sio.stdoutR
+	e.sio = sio
+
+	e.stdout = bufio.NewScanner(sio.stdoutR)
 	e.stdout.Split(splitReadyToken)
-	e.stderr.Split(splitReadyToken)
+
+	mem := ws.mem()
+
+	if err := initModule(mod, sio); err != nil {
+		return err
+	}
+
+	wrapper := scriptPreamble + string(exiftoolScript)
+	scriptPtr := mod.Xmalloc(int32(len(wrapper) + 1))
+	copy(mem[scriptPtr:], wrapper)
+	mem[scriptPtr+int32(len(wrapper))] = 0
+
+	argPtrs := make([]int32, len(e.args))
+	for i, arg := range e.args {
+		b := append([]byte(arg), 0)
+		argPtrs[i] = mod.Xmalloc(int32(len(b)))
+		copy(mem[argPtrs[i]:], b)
+	}
+
+	var argvPtr int32
+	if len(argPtrs) > 0 {
+		argvPtr = mod.Xmalloc(int32(len(argPtrs) * 4))
+		for i, p := range argPtrs {
+			binary.LittleEndian.PutUint32(mem[argvPtr+int32(i*4):], uint32(p))
+		}
+	}
 
 	evalDone := make(chan struct{})
 	e.evalDone = evalDone
@@ -212,114 +235,60 @@ func (e *Server) start() error {
 
 	go func() {
 		defer close(evalDone)
-		defer func() { _ = stdinW.Close() }()
-		defer func() { _ = stdoutW.Close() }()
-		defer func() { _ = stderrW.Close() }()
-		defer func() { _ = stdinR.Close() }()
-
-		mallocFn := mod.ExportedFunction("malloc")
-		freeFn := mod.ExportedFunction("free")
-		mem := mod.Memory()
-
-		writeString := func(s string) (uint32, error) {
-			b := append([]byte(s), 0)
-			res, err := mallocFn.Call(context.Background(), uint64(len(b)))
-			if err != nil {
-				return 0, fmt.Errorf("malloc failed: %w", err)
-			}
-			ptr := uint32(res[0])
-			if !mem.Write(ptr, b) {
-				if _, freeErr := freeFn.Call(context.Background(), uint64(ptr)); freeErr != nil {
-					return 0, fmt.Errorf("mem.Write failed at %d (free also failed: %w)", ptr, freeErr)
-				}
-				return 0, fmt.Errorf("mem.Write failed at %d", ptr)
-			}
-			return ptr, nil
-		}
-
-		wrapper := scriptPreamble + string(exiftoolScript)
-		scriptPtr, err := writeString(wrapper)
-		if err != nil {
-			e.evalErr = fmt.Errorf("failed to allocate script memory: %w", err)
-			return
-		}
+		defer func() { _ = sio.stdoutW.Close() }()
+		defer func() { _ = sio.stdinR.Close() }()
 		defer func() {
-			_, _ = freeFn.Call(context.Background(), uint64(scriptPtr))
+			if r := recover(); r != nil {
+				if ep, ok := r.(exitPanic); ok {
+					if ep.code != 0 {
+						e.evalErr = fmt.Errorf("exiftool exited with code %d", ep.code)
+					}
+				} else {
+					panic(r)
+				}
+			}
 		}()
 
-		argPtrs := make([]uint32, len(e.args))
-		for i, arg := range e.args {
-			argPtrs[i], err = writeString(arg)
-			if err != nil {
-				e.evalErr = fmt.Errorf("failed to allocate arg memory: %w", err)
-				for j := 0; j < i; j++ {
-					_, _ = freeFn.Call(context.Background(), uint64(argPtrs[j]))
-				}
-				return
-			}
-			defer func(ptr uint32) {
-				_, _ = freeFn.Call(context.Background(), uint64(ptr))
-			}(argPtrs[i])
-		}
+		mod.Xzeroperl_eval(scriptPtr, 1, int32(len(e.args)), argvPtr)
 
-		var argvPtr uint32
-		if len(argPtrs) > 0 {
-			res, err := mallocFn.Call(context.Background(), uint64(len(argPtrs)*4))
-			if err != nil {
-				e.evalErr = fmt.Errorf("failed to allocate argv: %w", err)
-				return
-			}
-			argvPtr = uint32(res[0])
-			defer func() {
-				_, _ = freeFn.Call(context.Background(), uint64(argvPtr))
-			}()
-			for i, p := range argPtrs {
-				if !mem.WriteUint32Le(argvPtr+uint32(i*4), p) {
-					e.evalErr = fmt.Errorf("failed to write argv[%d]", i)
-					return
-				}
-			}
+		mod.Xfree(scriptPtr)
+		for _, p := range argPtrs {
+			mod.Xfree(p)
 		}
-
-		evalFn := mod.ExportedFunction("zeroperl_eval")
-		if evalFn == nil {
-			e.evalErr = fmt.Errorf("zeroperl_eval not found")
-			return
-		}
-
-		_, err = evalFn.Call(context.Background(), uint64(scriptPtr), uint64(1), uint64(len(e.args)), uint64(argvPtr))
-		if err != nil {
-			var exitErr *sys.ExitError
-			if errors.As(err, &exitErr) {
-				if exitErr.ExitCode() != 0 {
-					e.evalErr = fmt.Errorf("exiftool exited with code %d", exitErr.ExitCode())
-				}
-			} else {
-				e.evalErr = err
-			}
+		if argvPtr != 0 {
+			mod.Xfree(argvPtr)
 		}
 	}()
 
 	return nil
 }
 
-func (e *Server) stop() {
+// stopForceClose tears down the server without waiting for the eval goroutine.
+// It sends the -stay_open false signal, closes both ends of the stdin and
+// stdout pipes (so Perl's next I/O attempt fails), and releases the stdout
+// reader.
+//
+// This is the correct shutdown path when Perl may be in an uninterruptible
+// computation phase (e.g. during initial module loading) where it is not
+// reading from stdin. Xzeroperl_eval is synchronous native code — it cannot
+// be preempted or interrupted. The eval goroutine will eventually encounter
+// a pipe error on its next I/O attempt and exit, at which point evalDone is
+// closed. Under -count=1 each test gets a fresh process, so orphaned
+// goroutines die with the process.
+func (e *Server) stopForceClose() {
 	if e.stdinW != nil {
+		_, _ = fmt.Fprint(e.stdinW, "-stay_open\nfalse\n")
 		_ = e.stdinW.Close()
 	}
-	if e.mod != nil {
-		_ = e.mod.Close(context.Background())
-	}
-	if e.evalDone != nil {
-		<-e.evalDone
+	if e.sio != nil {
+		// Close stdinR and stdoutW. This forces any in-flight Perl I/O to fail.
+		// The eval goroutine's deferred cleanup also closes these, but closing
+		// here ensures failure is immediate rather than delayed.
+		e.sio.CloseAll()
 	}
 	if e.stdoutR != nil {
 		_ = e.stdoutR.Close()
 		e.stdoutR = nil
-	}
-	if e.stderrR != nil {
-		_ = e.stderrR.Close()
-		e.stderrR = nil
 	}
 }
 
@@ -329,14 +298,14 @@ func (e *Server) restart() {
 	if e.done {
 		return
 	}
-	e.stop()
+	e.stopForceClose()
 	e.restartErr = e.start()
 }
 
-// Command runs one ExifTool request: arguments are sent as lines on the server's
-// stdin, then an -execute boundary. On success, returns a copy of stdout for that
-// response (stderr is checked for errors). After [Shutdown] or [Close], Command
-// returns an error and does not restart the server.
+// Command sends one ExifTool command via the stay_open protocol and blocks
+// until the response (delimited by the {ready} token) is received. If
+// ExifTool writes to stderr, it is returned as an error and the response is
+// nil. On any I/O failure the server restarts automatically.
 func (e *Server) Command(arg ...string) ([]byte, error) {
 	e.cmdMtx.Lock()
 	defer e.cmdMtx.Unlock()
@@ -353,11 +322,17 @@ func (e *Server) Command(arg ...string) ([]byte, error) {
 		return nil, fmt.Errorf("server had a previous restart error: %w", err)
 	}
 
-	if err := e.stdin.print(arg...); err != nil {
-		e.restart()
-		return nil, err
+	e.sio.stderrMu.Lock()
+	stderrBefore := e.sio.stderrB.Len()
+	e.sio.stderrMu.Unlock()
+
+	for _, a := range arg {
+		if _, err := fmt.Fprintf(e.stdinW, "%s\n", a); err != nil {
+			e.restart()
+			return nil, err
+		}
 	}
-	if err := e.stdin.print("-execute" + boundary); err != nil {
+	if _, err := fmt.Fprintf(e.stdinW, "-execute%s\n", boundary); err != nil {
 		e.restart()
 		return nil, err
 	}
@@ -379,70 +354,60 @@ func (e *Server) Command(arg ...string) ([]byte, error) {
 		e.restart()
 		return nil, err
 	}
-	if !e.stderr.Scan() {
-		err := e.stderr.Err()
-		if err == nil {
-			select {
-			case <-e.evalDone:
-				if e.evalErr != nil {
-					err = e.evalErr
-				} else {
-					err = fmt.Errorf("exiftool: server closed unexpectedly: %w", io.EOF)
-				}
-			default:
-				err = fmt.Errorf("exiftool: server closed unexpectedly: %w", io.EOF)
+
+	stderrData := e.sio.DrainStderr(stderrBefore)
+	if len(stderrData) > 0 {
+		scanner := bufio.NewScanner(bytes.NewReader(stderrData))
+		scanner.Split(splitReadyToken)
+		if scanner.Scan() {
+			if len(scanner.Bytes()) > 0 {
+				return nil, errors.New("exiftool: " + string(bytes.TrimSpace(scanner.Bytes())))
 			}
 		}
-		e.restart()
-		return nil, err
 	}
 
-	if len(e.stderr.Bytes()) > 0 {
-		return nil, errors.New("exiftool: " + string(bytes.TrimSpace(e.stderr.Bytes())))
-	}
 	return append([]byte(nil), e.stdout.Bytes()...), nil
 }
 
-// finalize marks the server as done and cleans up readers and the runtime.
-// It must be called with srvMtx held.
 func (e *Server) finalize() error {
 	e.done = true
 	if e.stdoutR != nil {
 		_ = e.stdoutR.Close()
 		e.stdoutR = nil
 	}
-	if e.stderrR != nil {
-		_ = e.stderrR.Close()
-		e.stderrR = nil
-	}
-	return e.runtime.Close(context.Background())
+	return nil
 }
 
-// Close forcibly stops the server: closes stdin and the WASM module, waits for the
-// long-running eval goroutine, then closes the wazero runtime. Idempotent; safe after
-// [Shutdown]. A second Close returns nil.
+// Close forcibly stops the server by closing all I/O pipes. It does NOT
+// wait for the eval goroutine to finish — this is necessary because
+// Xzeroperl_eval is synchronous native code that may be in an
+// uninterruptible computation phase (e.g. Perl module loading) where it
+// is not reading from stdin. The goroutine will exit on its next failed
+// I/O attempt. It is safe to call Close multiple times.
 func (e *Server) Close() error {
 	e.srvMtx.Lock()
 	defer e.srvMtx.Unlock()
 	if e.done {
 		return nil
 	}
-	if e.stdinW != nil {
-		_ = e.stdinW.Close()
-	}
-	if e.mod != nil {
-		_ = e.mod.Close(context.Background())
-	}
-	if e.evalDone != nil {
-		<-e.evalDone
-	}
+	e.stopForceClose()
 	return e.finalize()
 }
 
-// Shutdown stops ExifTool cleanly by sending -stay_open false and closing stdin,
-// waits for processing to finish, then releases resources like [Close]. Returns an
-// error if the server was already closed. If [Close] runs concurrently, Shutdown
-// may return nil after the other caller has finalized the runtime.
+// Shutdown performs a graceful shutdown: it sends the -stay_open false
+// signal, closes stdin, and waits for the eval goroutine to complete
+// before releasing resources.
+//
+// This is safe ONLY when the server has completed initialization and
+// Perl is in the -stay_open read loop. If Perl is still initializing
+// (loading modules, not reading stdin), this will block indefinitely
+// because Xzeroperl_eval is synchronous native code that cannot be
+// interrupted.
+//
+// For a force-quit that works at any point in the server lifecycle, use
+// [Server.Close] instead.
+//
+// Returns an error if called after the server is already closed.
 func (e *Server) Shutdown() error {
 	e.cmdMtx.Lock()
 	defer e.cmdMtx.Unlock()
@@ -454,8 +419,10 @@ func (e *Server) Shutdown() error {
 	}
 	e.srvMtx.Unlock()
 
-	_ = e.stdin.print("-stay_open", "false")
-	if err := e.stdin.close(); err != nil {
+	// Send shutdown signal and wait for Perl to process it.
+	// Perl MUST be in the -stay_open read loop for this to complete.
+	fmt.Fprintf(e.stdinW, "-stay_open\nfalse\n")
+	if err := e.stdinW.Close(); err != nil {
 		return fmt.Errorf("failed to close stdin: %w", err)
 	}
 	<-e.evalDone
@@ -468,8 +435,9 @@ func (e *Server) Shutdown() error {
 	return e.finalize()
 }
 
-// splitReadyToken is a [bufio.SplitFunc] for ExifTool -stay_open output: each response
-// ends with the ready marker from -echo4 (see boundary) and a newline.
+// splitReadyToken is a bufio.SplitFunc that scans until the ExifTool
+// "{ready<boundary>}" response token followed by a newline. The token and
+// newline are consumed but not included in the returned token data.
 func splitReadyToken(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if i := bytes.Index(data, []byte("{ready"+boundary+"}")); i >= 0 {
 		if n := bytes.IndexByte(data[i:], '\n'); n >= 0 {

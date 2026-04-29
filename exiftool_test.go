@@ -9,6 +9,8 @@ import (
 )
 
 func TestExiftoolVersion(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	ctx := context.Background()
 	workDir := os.DirFS("testdata")
 
@@ -25,6 +27,8 @@ func TestExiftoolVersion(t *testing.T) {
 }
 
 func TestExiftoolJSON(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	ctx := context.Background()
 	workDir := os.DirFS("testdata")
 
@@ -68,6 +72,8 @@ func TestExiftoolJSON(t *testing.T) {
 }
 
 func TestExiftoolMultipleArgs(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	ctx := context.Background()
 	workDir := os.DirFS("testdata")
 
@@ -86,4 +92,19 @@ func TestExiftoolMultipleArgs(t *testing.T) {
 		t.Errorf("expected at least 3 fields (SourceFile, Make, Model), got %d", len(fields))
 	}
 	t.Logf("fields: %v", fields)
+}
+
+func TestRunDebug(t *testing.T) {
+	skipSlowRaceTest(t)
+
+	ctx := context.Background()
+	workDir := os.DirFS("testdata")
+
+	out, err := RunDebug(ctx, workDir, "-ver")
+	if err != nil {
+		t.Fatalf("RunDebug: %v", err)
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		t.Fatal("RunDebug: empty output")
+	}
 }

@@ -11,6 +11,8 @@ import (
 )
 
 func TestServer(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -20,8 +22,8 @@ func TestServer(t *testing.T) {
 	out, err := e.Command("-ver")
 	if err != nil {
 		t.Error(err)
-	} else if ver, err := strconv.ParseFloat(string(bytes.TrimSpace(out)), 64); err != nil {
-		t.Error(err)
+	} else if ver, parseErr := strconv.ParseFloat(string(bytes.TrimSpace(out)), 64); parseErr != nil {
+		t.Error(parseErr)
 	} else {
 		t.Log(ver)
 	}
@@ -52,13 +54,15 @@ func TestServer(t *testing.T) {
 }
 
 func TestServerReadTags(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -87,13 +91,15 @@ func TestServerReadTags(t *testing.T) {
 }
 
 func TestServerReadAllTags(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -117,13 +123,15 @@ func TestServerReadAllTags(t *testing.T) {
 }
 
 func TestServerGPSTags(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -149,13 +157,15 @@ func TestServerGPSTags(t *testing.T) {
 }
 
 func TestServerMultipleCommands(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -172,13 +182,15 @@ func TestServerMultipleCommands(t *testing.T) {
 }
 
 func TestServerMultipleFiles(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -196,13 +208,15 @@ func TestServerMultipleFiles(t *testing.T) {
 }
 
 func TestServerNonexistentFile(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -214,13 +228,15 @@ func TestServerNonexistentFile(t *testing.T) {
 }
 
 func TestServerShortFormat(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -240,6 +256,8 @@ func TestServerShortFormat(t *testing.T) {
 }
 
 func TestServerWriteTag(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	src, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -247,8 +265,8 @@ func TestServerWriteTag(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "write_test.jpg")
-	if err := os.WriteFile(tmpFile, src, 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(tmpFile, src, 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	e, err := NewServer()
@@ -256,8 +274,8 @@ func TestServerWriteTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -284,6 +302,8 @@ func TestServerWriteTag(t *testing.T) {
 }
 
 func TestServerDeleteTag(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	src, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -291,8 +311,8 @@ func TestServerDeleteTag(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "delete_test.jpg")
-	if err := os.WriteFile(tmpFile, src, 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(tmpFile, src, 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	e, err := NewServer()
@@ -300,8 +320,8 @@ func TestServerDeleteTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -328,6 +348,8 @@ func TestServerDeleteTag(t *testing.T) {
 }
 
 func TestServerCopyTags(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	src, err := os.ReadFile("testdata/sample_noexif.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -335,8 +357,8 @@ func TestServerCopyTags(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	dstFile := filepath.Join(tmpDir, "copy_dst.jpg")
-	if err := os.WriteFile(dstFile, src, 0644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(dstFile, src, 0644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	e, err := NewServer()
@@ -344,8 +366,8 @@ func TestServerCopyTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -375,13 +397,15 @@ func TestServerCopyTags(t *testing.T) {
 }
 
 func TestServerJSONOutput(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -418,13 +442,15 @@ func TestServerClose(t *testing.T) {
 }
 
 func TestServerConcurrentCommands(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -455,13 +481,15 @@ func TestServerConcurrentCommands(t *testing.T) {
 }
 
 func TestServerConcurrentReads(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -498,14 +526,16 @@ func TestServerConcurrentReads(t *testing.T) {
 }
 
 func TestServerCommonArgs(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	// Create server with common args
 	e, err := NewServer("-fast")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -525,13 +555,15 @@ func TestServerCommonArgs(t *testing.T) {
 }
 
 func TestServerPNG(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 
@@ -551,13 +583,15 @@ func TestServerPNG(t *testing.T) {
 }
 
 func TestServerTIFF(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := e.Shutdown(); err != nil {
-			t.Logf("Shutdown error: %v", err)
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
 		}
 	}()
 

@@ -97,6 +97,8 @@ func TestCommandArgsWithBoth(t *testing.T) {
 }
 
 func TestServerWithConfig(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	savedExec, savedArg1, savedConfig := Exec, Arg1, Config
 	defer func() { Exec, Arg1, Config = savedExec, savedArg1, savedConfig }()
 
@@ -137,6 +139,8 @@ func TestServerRestart(t *testing.T) {
 }
 
 func TestServerCommandAfterKill(t *testing.T) {
+	skipSlowRaceTest(t)
+
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -150,11 +154,11 @@ func TestServerCommandAfterKill(t *testing.T) {
 	t.Logf("Before kill: %s", bytes.TrimSpace(out))
 
 	// Kill the underlying process to trigger restart path
-	if err := e.cmd.Process.Kill(); err != nil {
-		t.Logf("Kill error: %v", err)
+	if killErr := e.cmd.Process.Kill(); killErr != nil {
+		t.Logf("Kill error: %v", killErr)
 	}
-	if err := e.cmd.Process.Release(); err != nil {
-		t.Logf("Release error: %v", err)
+	if releaseErr := e.cmd.Process.Release(); releaseErr != nil {
+		t.Logf("Release error: %v", releaseErr)
 	}
 
 	// The next command should trigger a restart attempt

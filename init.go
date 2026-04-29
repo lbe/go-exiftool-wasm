@@ -1,22 +1,27 @@
-// Package exiftool runs ExifTool in-process via an embedded Perl interpreter (zeroperl)
-// compiled to WebAssembly and executed with wazero. No external exiftool binary or
-// Perl installation is required.
+// Package exiftool runs ExifTool in-process via an embedded Perl interpreter
+// (zeroperl) compiled to native Go via wasm2go with a custom WASI host layer.
+// No external exiftool binary or Perl installation is required.
+//
+// The Perl stdlib and ExifTool modules are embedded as LZ4-compressed files and
+// transparently decompressed on first read via an LRU cache.
 //
 // Entry points:
-//   - [Command] / [CommandContext]: one-shot invocation; host paths are relative to
-//     the process working directory and are visible read-only under "/" inside the sandbox,
-//     with [os.TempDir] mounted read-write for ExifTool side effects.
-//   - [Run] / [RunDebug]: single invocation with an explicit [fs.FS] mounted at "/work";
-//     pass paths such as "/work/photo.jpg".
-//   - [NewServer]: persistent ExifTool using the -stay_open protocol; amortizes WASM
-//     startup across many [Server.Command] calls. Call [Server.Shutdown] or [Server.Close]
-//     when finished.
+//   - [Command] / [CommandContext]: one-shot invocation; host paths are visible
+//     read-only under "/" inside the sandbox, with [os.TempDir] mounted read-write
+//     for ExifTool side effects.
+//   - [Run] / [RunDebug]: single invocation with an explicit [fs.FS] mounted at
+//     "/work"; pass paths such as "/work/photo.jpg".
+//   - [NewServer]: persistent ExifTool using the -stay_open protocol; amortises
+//     Perl startup across many [Server.Command] calls. Call [Server.Shutdown] or
+//     [Server.Close] when finished.
 //
-// Configuration package variables [Arg1] and [Config] are forwarded into the ExifTool
-// argument list for [Command]/[CommandContext] and [NewServer]. [Exec] is kept for API compatibility
-// but is not used to spawn a process. Leave [Arg1] empty unless you intend to pass a valid
-// ExifTool option: it is prepended verbatim and a mistaken value can be interpreted as a
-// file argument.
+// Configuration package variables [Arg1] and [Config] are forwarded into the
+// ExifTool argument list for [Command]/[CommandContext] and [NewServer]. [Exec]
+// is kept for API compatibility but is not used to spawn a process. Leave [Arg1]
+// empty unless you intend to pass a valid ExifTool option: it is prepended
+// verbatim and a mistaken value can be interpreted as a file argument.
+//
+// The Perl version is controlled by the [Perl5Lib] constant in perlversion.go.
 package exiftool
 
 // Exec is retained for compatibility with the original go-exiftool API.
