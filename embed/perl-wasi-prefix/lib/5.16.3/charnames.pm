@@ -1,0 +1,71 @@
+package charnames;
+use strict;
+use warnings;
+our $VERSION = '1.30';
+use unicore::Name;
+use _charnames ();
+
+use bytes ();
+use re "/aa";
+
+$Carp::Internal{ (__PACKAGE__) } = 1;
+
+sub import {
+    shift;
+    _charnames->import(@_);
+}
+
+my %viacode;
+
+sub viacode {
+    return _charnames::viacode(@_);
+}
+
+sub vianame {
+    if ( @_ != 1 ) {
+        _charnames::carp "charnames::vianame() expects one name argument";
+        return ();
+    }
+
+    my $arg = shift;
+
+    if ( $arg =~ /^U\+([0-9a-fA-F]+)$/ ) {
+
+        my $ord = CORE::hex $1;
+        return chr $ord
+          if $ord <= 255 || !( ( caller 0 )[8] & $bytes::hint_bits );
+        _charnames::carp _charnames::not_legal_use_bytes_msg( $arg, chr $ord );
+        return;
+    }
+
+    return _charnames::lookup_name( $arg, 1, 1 );
+}
+
+sub string_vianame {
+
+    if ( @_ != 1 ) {
+        _charnames::carp
+          "charnames::string_vianame() expects one name argument";
+        return;
+    }
+
+    my $arg = shift;
+
+    if ( $arg =~ /^U\+([0-9a-fA-F]+)$/ ) {
+
+        my $ord = CORE::hex $1;
+        return chr $ord
+          if $ord <= 255 || !( ( caller 0 )[8] & $bytes::hint_bits );
+
+        _charnames::carp _charnames::not_legal_use_bytes_msg( $arg, chr $ord );
+        return;
+    }
+
+    return _charnames::lookup_name( $arg, 0, 1 );
+}
+
+1;
+__END__
+
+
+# ex: set ts=8 sts=2 sw=2 et:

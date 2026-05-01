@@ -179,6 +179,9 @@ func (e *Server) start() error {
 		WithFSMount(e.rootFS, "/").
 		WithFSMount(devFS, "/dev").
 		WithDirMount(os.TempDir(), os.TempDir())
+	if _, ok := embeddedPerlLibVersion(); ok {
+		fsConfig = fsConfig.WithFSMount(perlFS(), "/zeroperl")
+	}
 
 	config := wazero.NewModuleConfig().
 		WithStdin(stdinR).
@@ -187,8 +190,10 @@ func (e *Server) start() error {
 		WithName("zeroperl").
 		WithArgs("zeroperl").
 		WithStartFunctions().
-		WithEnv("PERL5LIB", "/lib/5.42.0:/lib/5.42.0/wasm32-wasi").
 		WithFSConfig(fsConfig)
+	if version, ok := embeddedPerlLibVersion(); ok {
+		config = config.WithEnv("PERL5LIB", perl5LibEnv(version))
+	}
 
 	mod, err := e.runtime.InstantiateModule(context.Background(), e.compiled, config)
 	if err != nil {
@@ -224,7 +229,7 @@ func (e *Server) start() error {
 		return fmt.Errorf("failed to bind guest memory exports")
 	}
 	arena := guestarena.NewWazero(mem, mallocFn, freeFn)
-	layout, err := guestarena.PackEvalData(context.Background(), arena, cachedWrappedExiftoolScript(), e.args)
+	layout, err := guestarena.PackEvalData(context.Background(), arena, resolveExiftoolScript(e.rootFS, nil), e.args)
 	if err != nil {
 		_ = arena.Close(context.Background())
 		cleanup()

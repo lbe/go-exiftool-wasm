@@ -44,7 +44,7 @@ flowchart TB
 | `embed/perl-wasi-prefix/` | `//go:embed all:` into `perlFSRoot` | Perl `@INC` tree: `lib/<version>/`, `lib/<version>/wasm32-wasi/` (includes `Image::ExifTool`). |
 | `embed/exiftool.min.pl` | `//go:embed` into `exiftoolScript` | Minified ExifTool driver script, prefixed at runtime with a small **autoflush** preamble so stdout/stderr flush before `exit(0)`. |
 
-`PERL5LIB` is set inside the module config to `/lib/5.42.0:/lib/5.42.0/wasm32-wasi` (see `exiftool.go` and `server.go`). If you refresh embeds with a different Perl version, these paths must stay consistent with the tree under `embed/perl-wasi-prefix/lib/`.
+When `embed/perl-wasi-prefix/lib/<version>/` exists, runtime auto-detects `<version>`, mounts the embedded prefix at `/zeroperl`, and sets `PERL5LIB` to `/zeroperl/lib/<version>:/zeroperl/lib/<version>/wasm32-wasi` (see `exiftool.go` and `server.go`). If no versioned embedded prefix is present (for fully embedded `zeroperl.wasm` use), the runtime skips both the `/zeroperl` mount and `PERL5LIB` env injection.
 
 ## Guest filesystem layout (WASI preopens)
 
@@ -130,7 +130,7 @@ sequenceDiagram
 
 Implementation notes (see source in `exiftool.go`):
 
-- **Script body**: `scriptPreamble` + `exiftoolScript` (copied into WASM with a trailing NUL).
+- **Script body**: `scriptPreamble` + resolved ExifTool script bytes (copied into WASM with a trailing NUL). Resolution prefers external `exiftool.min.pl` from mounted guest filesystems and falls back to embedded `exiftoolScript`.
 - **Arguments**: The script, argv table, and argument strings are packed into a single guest allocation instead of one guest allocation per string.
 - **Success on `exit(0)`**: Perl’s `exit(0)` surfaces as **`sys.ExitError`** in wazero; non-zero exit and other errors are wrapped and may attach **stderr** text.
 - The guest entry symbol name is **`zeroperl_eval`** (exported by zeroperl).

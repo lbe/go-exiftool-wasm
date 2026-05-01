@@ -22,8 +22,7 @@ BEGIN {
         }
     }
     $Image::ExifTool::exeDir = $exeDir;
-
-    unshift @INC, $incDir;
+     unshift @INC, $incDir;
     while ( @ARGV and lc( $ARGV[0] ) eq '-config' ) {
         shift;
         push @Image::ExifTool::configFiles, shift;
@@ -228,7 +227,7 @@ my $isCRLF = { MSWin32 => 1, os2 => 1, dos => 1 }->{$^O};
 my %jsonChar =
   ( '"' => '"', '\\' => '\\', "\t" => 't', "\n" => 'n', "\r" => 'r' );
 
-my %escC   = ( "\n" => '\n', "\r" => '\r', "\t" => '\t', '\\' => '\\\\' );
+my %escC = ( "\n" => '\n', "\r" => '\r', "\t" => '\t', '\\' => '\\\\' );
 my %unescC = (
     a    => "\a",
     b    => "\b",
@@ -248,13 +247,11 @@ my %optArgs = (
     '-api'             => 1,
     '-c'               => 1,
     '-coordformat'     => 1,
-    '-charset'         => 0,
-    '-config'          => 1,
+    '-charset'         => 0, '-config' => 1,
     '-csvdelim'        => 1,
     '-d'               => 1,
     '-dateformat'      => 1,
-    '-D'               => 0,
-    '-diff'            => 1,
+    '-D'               => 0, '-diff' => 1,
     '-echo'            => 1,
     '-echo#'           => 1,
     '-efile'           => 1,
@@ -278,8 +275,7 @@ my %optArgs = (
     '-ignore'          => 1,
     '-if'              => 1,
     '-if#'             => 1,
-    '-lang'            => 0,
-    '-listitem'        => 1,
+    '-lang'            => 0, '-listitem' => 1,
     '-o'               => 1,
     '-out'             => 1,
     '-p'               => 1,
@@ -425,7 +421,7 @@ Command: for ( ; ; ) {
     undef $rafStdin;
 
     $rtnValPrev = $rtnVal;
-    $rtnValApp  = $rtnVal if $rtnVal;
+    $rtnValApp = $rtnVal if $rtnVal;
 
     last unless @ARGV or not defined $rtnVal or $stayOpen >= 2 or @commonArgs;
 
@@ -440,7 +436,7 @@ Command: for ( ; ; ) {
         }
         else {
             eval { require IO::Handle } and STDERR->flush();
-            my $id   = defined $executeID ? $executeID : '';
+            my $id = defined $executeID ? $executeID : '';
             my $save = $|;
             $| = 1;
             print "{ready$id}\n";
@@ -728,9 +724,10 @@ Command: for ( ; ; ) {
                             %opts );
                         next;
                     }
-                    my $wr  = ( $type eq 'w' );
-                    my $msg = ( $wr ? 'Writable' : 'Available' )
-                      . ( $group ? " $group" : '' ) . ' tags';
+                    my $wr = ( $type eq 'w' );
+                    my $msg =
+                        ( $wr    ? 'Writable' : 'Available' )
+                      . ( $group ? " $group"  : '' ) . ' tags';
                     PrintTagList( $msg,
                         $wr ? GetWritableTags($group) : GetAllTags($group) );
                     next if $group or $wr;
@@ -799,9 +796,7 @@ Command: for ( ; ; ) {
                         print join( ',', @entry ), "\n";
                     }
                 }
-                else {
-
-                    my $family = $2 || 0;
+                else {  my $family = $2 || 0;
                     PrintTagList(
                         "Groups in family $family",
                         $mt->GetAllGroups($family)
@@ -1032,8 +1027,8 @@ Command: for ( ; ; ) {
                     next;
                 }
                 $dbFile =~ s/^(\+?=)//;
-                $dbAdd = 2        if $1 eq '+=';
-                $vout  = \*STDERR if $srcStdin;
+                $dbAdd = 2 if $1 eq '+=';
+                $vout = \*STDERR if $srcStdin;
                 $verbose and print $vout "Reading $dbType file $dbFile\n";
                 my $msg;
                 if ( $mt->Open( \*CSVFILE, $dbFile ) ) {
@@ -1101,7 +1096,7 @@ Command: for ( ; ; ) {
             ( $a eq 'ex' or $a eq 'escapexml' ) and $escapeXML = 1, next;
 
             if (/^echo(\d)?$/i) {
-                my $n   = $1 || 1;
+                my $n = $1 || 1;
                 my $arg = shift;
                 next unless defined $arg;
                 $n > 4 and Warn("Invalid -echo number\n"), next;
@@ -1116,7 +1111,7 @@ Command: for ( ; ; ) {
             }
             if (/^(ee|extractembedded)(\d*)$/i) {
                 $mt->Options( ExtractEmbedded => $2 || 1 );
-                $mt->Options( Duplicates      => 1 );
+                $mt->Options( Duplicates => 1 );
                 next;
             }
             if (/^efile(\d+)?(!)?$/i) {
@@ -1165,14 +1160,15 @@ Command: for ( ; ; ) {
                 push @fileOrder, shift if @ARGV;
                 my $num = $1 || 0;
                 $fileOrderFast = $num
-                  if not defined $fileOrderFast or $fileOrderFast > $num;
+                  if not defined $fileOrderFast
+                  or $fileOrderFast > $num;
                 next;
             }
             $a eq 'globaltimeshift'
               and $mt->Options( GlobalTimeShift => shift ), next;
             if (/^(g)(roupHeadings|roupNames)?([\d:]*)$/i) {
                 $showGroup = $3 || 0;
-                $allGroup  = ( $2 ? lc($2) eq 'roupnames' : $1 eq 'G' );
+                $allGroup = ( $2 ? lc($2) eq 'roupnames' : $1 eq 'G' );
                 $mt->Options( SavePath   => 1 ) if $showGroup =~ /\b5\b/;
                 $mt->Options( SaveFormat => 1 ) if $showGroup =~ /\b6\b/;
                 next;
@@ -1215,7 +1211,7 @@ Command: for ( ; ; ) {
             ( /^H$/ or $a eq 'hex' ) and $showTagID = 'H', next;
             if (/^htmldump([-+]?\d+)?$/i) {
                 $verbose = ( $verbose || 0 ) + 1;
-                $html    = 2;
+                $html = 2;
                 $mt->Options( HtmlDumpBase => $1 ) if defined $1;
                 next;
             }
@@ -1292,7 +1288,7 @@ Command: for ( ; ; ) {
               and $mt->Options( IgnoreMinorErrors => 1 ), next;
             /^(n|-printconv)$/i and $mt->Options( PrintConv => 0 ), next;
             /^(-n|printconv)$/i and $mt->Options( PrintConv => 1 ), next;
-            $a eq 'nop'         and $helped = 1, next;
+            $a eq 'nop' and $helped = 1, next;
             if (/^o(ut)?$/i) {
                 $outOpt = shift;
                 defined $outOpt
@@ -1338,7 +1334,7 @@ Command: for ( ; ; ) {
                 }
                 else {
                     $progress = 1;
-                    $verbose  = 0 unless defined $verbose;
+                    $verbose = 0 unless defined $verbose;
                 }
                 $progressCount = 0;
                 next;
@@ -1347,8 +1343,7 @@ Command: for ( ; ; ) {
               and $purge = $1 || 1, Image::ExifTool::Purge($purge), next;
             /^q(uiet)?$/i and ++$quiet, next;
             /^r(ecurse)?(\.?)$/i and $recurse = ( $2 ? 2 : 1 ), next;
-            if ( $a eq 'require' ) {
-                my $ver = shift;
+            if ( $a eq 'require' ) { my $ver = shift;
                 unless ( defined $ver and Image::ExifTool::IsFloat($ver) ) {
                     Error("Expecting version number for -require option\n");
                     $badCmd = 1;
@@ -1535,7 +1530,7 @@ Command: for ( ; ; ) {
             if (/^z(ip)?$/i) {
                 $doUnzip = 1;
                 $mt->Options( Compress => 1, XMPShorthand => 1 );
-                $mt->Options( Compact  => 1 ) unless $mt->Options('Compact');
+                $mt->Options( Compact => 1 ) unless $mt->Options('Compact');
                 next;
             }
             $_ eq '' and push( @files, '-' ), $srcStdin = 1, next;
@@ -1720,7 +1715,7 @@ Command: for ( ; ; ) {
         }
         if ($binaryOutput) {
             $binaryOutput = 0;
-            $setCharset   = 'default' unless defined $setCharset;
+            $setCharset = 'default' unless defined $setCharset;
         }
         if (%printFmt) {
             Warn "The -csv option has no effect when -p is used\n";
@@ -1783,7 +1778,7 @@ Command: for ( ; ; ) {
     }
     elsif ($xml) {
         require Image::ExifTool::XMP;
-        my $charset = $mt->Options('Charset');
+        my $charset  = $mt->Options('Charset');
         my %encoding = (
             UTF8     => 'UTF-8',
             Latin    => 'windows-1252',
@@ -1807,17 +1802,14 @@ Command: for ( ; ; ) {
         $joinLists = 1 if $outFormat > 0;
         $mt->Options( List => 1 ) unless $joinLists;
         $showGroup = $allGroup = 1;
-
-        $binaryOutput = ( $outFormat > 0 ? undef : 0 ) if $binaryOutput;
-        $showTagID    = 'D' if $tabFormat and not $showTagID;
+         $binaryOutput = ( $outFormat > 0 ? undef : 0 ) if $binaryOutput;
+        $showTagID = 'D' if $tabFormat and not $showTagID;
     }
     elsif ($json) {
-        if ( $json == 1 ) {
-            $fileHeader  = '[';
+        if ( $json == 1 ) { $fileHeader = '[';
             $fileTrailer = "]\n";
         }
-        else {
-            $fileHeader  = 'Array(';
+        else { $fileHeader = 'Array(';
             $fileTrailer = ");\n";
         }
         if ($binaryOutput) {
@@ -1836,7 +1828,7 @@ Command: for ( ; ; ) {
 
     if ($argFormat) {
         $outFormat = 3;
-        $allGroup  = 1 if defined $showGroup;
+        $allGroup = 1 if defined $showGroup;
     }
 
     if ( Image::ExifTool::IsPC() ) {
@@ -1857,7 +1849,7 @@ Command: for ( ; ; ) {
     }
 
     if ($verbose) {
-        $disableOutput = 1  unless @tags or @exclude or $tagOut;
+        $disableOutput = 1 unless @tags or @exclude or $tagOut;
         undef $binaryOutput unless $tagOut;
         if ($html) {
             $html = 2;
@@ -1908,8 +1900,8 @@ Command: for ( ; ; ) {
                 if (
                        $newVal eq '@'
                     or not defined FilenameSPrintf($newVal)
-                    or
-                    grep /\bfile\d+:/i, @{ $setTags{$newVal} }
+                    or grep /\bfile\d+:/i,
+                    @{ $setTags{$newVal} }
                   )
                 {
                     push @dynamicFiles, $newVal;
@@ -1935,8 +1927,7 @@ Command: for ( ; ; ) {
                 next;
             }
             my %opts = ( Shift => 0 );
-
-            $opts{Protected} = 1 unless $tag =~ /[?*]/;
+             $opts{Protected} = 1 unless $tag =~ /[?*]/;
 
             if ( $tag =~ s/<// and defined $newVal ) {
                 if ( defined FilenameSPrintf($newVal) ) {
@@ -1948,8 +1939,7 @@ Command: for ( ; ; ) {
                     my $result = Image::ExifTool::IsWritable($tag);
                     if ($result) {
                         $opts{ProtectSaved} = $saveCount;
-
-                        push @dynamicFiles, [ $tag, $newVal, \%opts ];
+                         push @dynamicFiles, [ $tag, $newVal, \%opts ];
                         ++$isWriting;
                     }
                     elsif ( defined $result ) {
@@ -1963,8 +1953,7 @@ Command: for ( ; ; ) {
             }
             if ( $tag =~ s/([-+]|\xe2\x88\x92)$// ) {
                 $opts{ $addDelOpt{$1} } = 1;
-
-                $newVal = '' if $1 eq '-' and not defined $newVal;
+                 $newVal = '' if $1 eq '-' and not defined $newVal;
             }
             if ( $escapeC and defined $newVal ) {
                 $newVal =~
@@ -2030,8 +2019,7 @@ s/\\(x([0-9a-fA-F]{2})|.)/$2 ? chr(hex($2)) : $unescC{$1} || $1/seg;
 
     if ($textOut) {
         CleanFilename($textOut);
-
-        $textOut = ".$textOut" unless $textOut =~ /[.%]/ or defined $tagOut;
+         $textOut = ".$textOut" unless $textOut =~ /[.%]/ or defined $tagOut;
     }
 
     if ($outOpt) {
@@ -2068,7 +2056,7 @@ s/\\(x([0-9a-fA-F]{2})|.)/$2 ? chr(hex($2)) : $unescC{$1} || $1/seg;
         my @allFiles;
         ProcessFiles( $mt, \@allFiles );
         my $sortTool = Image::ExifTool->new;
-        $sortTool->Options( FastScan   => $fileOrderFast ) if $fileOrderFast;
+        $sortTool->Options( FastScan => $fileOrderFast ) if $fileOrderFast;
         $sortTool->Options( PrintConv  => $mt->Options('PrintConv') );
         $sortTool->Options( Duplicates => 0 );
         my ( %sortBy, %isFloat, @rev, $file );
@@ -2122,8 +2110,7 @@ s/\\(x([0-9a-fA-F]{2})|.)/$2 ? chr(hex($2)) : $unescC{$1} || $1/seg;
                 my $db = $database{$_};
                 tr/\\/\// and $database{$_} = $db;
                 $database{lc} = $db unless $database{lc};
-
-                my $absPath = AbsPath($_);
+                 my $absPath = AbsPath($_);
                 if ( defined $absPath ) {
                     $database{$absPath} = $db unless $database{$absPath};
                     if ( $verbose and $verbose > 1 ) {
@@ -2251,7 +2238,8 @@ s/\\(x([0-9a-fA-F]{2})|.)/$2 ? chr(hex($2)) : $unescC{$1} || $1/seg;
             or $textOut
             or %countLink )
         {
-            my $o = ( ( $html or $json or $xml or %printFmt or $csv or $plot )
+            my $o =
+              ( ( $html or $json or $xml or %printFmt or $csv or $plot )
                   and not $textOut ) ? \*STDERR : $vout;
             printf( $o "%5d directories scanned\n", $countDir ) if $countDir;
             printf( $o "%5d directories created\n", $countNewDir )
@@ -2279,16 +2267,19 @@ s/\\(x([0-9a-fA-F]{2})|.)/$2 ? chr(hex($2)) : $unescC{$1} || $1/seg;
             printf( $o "%5d files could not be read\n", $countBad )
               if $countBad;
             printf( $o "%5d output files created\n", scalar( keys %created ) )
-              if $textOut or $textOut2;
+              if $textOut
+              or $textOut2;
             printf( $o "%5d output files appended\n", scalar( keys %appended ) )
               if %appended;
             printf( $o "%5d hard links created\n", $countLink{Hard} || 0 )
-              if $countLink{Hard} or $countLink{BadHard};
+              if $countLink{Hard}
+              or $countLink{BadHard};
             printf( $o "%5d hard links could not be created\n",
                 $countLink{BadHard}
             ) if $countLink{BadHard};
             printf( $o "%5d symbolic links created\n", $countLink{Sym} || 0 )
-              if $countLink{Sym} or $countLink{BadSym};
+              if $countLink{Sym}
+              or $countLink{BadSym};
             printf( $o "%5d symbolic links could not be created\n",
                 $countLink{BadSym}
             ) if $countLink{BadSym};
@@ -2318,17 +2309,17 @@ sub GetImageInfo($$) {
 
     if ( defined $windowTitle ) {
         if ( $progressCount >= $progressNext ) {
-            my $prog  = $progressMax ? "$progressCount/$progressMax" : '0/0';
+            my $prog = $progressMax ? "$progressCount/$progressMax" : '0/0';
             my $title = $windowTitle;
             my ( $num, $denom ) = split '/', $prog;
             my $frac = $num / ( $denom || 1 );
             my $n    = $title =~ s/%(\d+)b/%b/ ? $1 : 20;
             my $bar  = int( $frac * $n + 0.5 );
             my %lkup = (
-                b   => ( 'I' x $bar ) . ( '.' x ( $n - $bar ) ),
-                f   => $orig,
-                p   => int( 100 * $frac + 0.5 ),
-                r   => $prog,
+                b => ( 'I' x $bar ) . ( '.' x ( $n - $bar ) ),
+                f => $orig,
+                p => int( 100 * $frac + 0.5 ),
+                r => $prog,
                 '%' => '%',
             );
             $title =~ s/%([%bfpr])/$lkup{$1}/eg;
@@ -2540,7 +2531,7 @@ sub GetImageInfo($$) {
             $o = \*STDOUT if ( $multiFile and not $quiet ) or $progress;
         }
     }
-    $o = \*STDERR                    if $progress and not $o;
+    $o = \*STDERR if $progress and not $o;
     Progress( $o, "======== $file" ) if $o;
     if ($info) {
         if ( @tags and not %printFmt ) {
@@ -2586,7 +2577,7 @@ sub GetImageInfo($$) {
                 $et2->Options( ListSep   => $$et{OPTIONS}{ListSep} );
                 $et2->Options( ListSplit => $$et{OPTIONS}{ListSplit} );
                 @found2 = @foundTags;
-                $info2  = $et2->ImageInfo( $file2, \@found2 );
+                $info2 = $et2->ImageInfo( $file2, \@found2 );
             }
             else {
                 $info2 = { Error => "Diff file not found" };
@@ -2709,8 +2700,8 @@ sub GetImageInfo($$) {
             next unless defined $tag;
             my $val = $et->GetValue($tag);
             next unless defined $val;
-            my $name = GetTagName($tag);
-            my $desc = $outFormat < 1 ? $et->GetDescription($tag) : $name;
+            my $name  = GetTagName($tag);
+            my $desc  = $outFormat < 1 ? $et->GetDescription($tag) : $name;
             my @tags2 = grep /^$name( |$)/, @groupTags2;
           T2: foreach $t2 (@tags2) {
                 next if $done2{$t2};
@@ -2877,7 +2868,7 @@ sub GetImageInfo($$) {
             $docNum{$tag} = $1 if $$tagExtra{$tag}{G3} =~ /(\d+)/;
         }
         $$plot{DocNum} = \%docNum;
-        $$plot{EE}     = 1 if $et->Options('ExtractEmbedded');
+        $$plot{EE} = 1 if $et->Options('ExtractEmbedded');
         $plot->AddPoints( $info, \@foundTags );
     }
     elsif ( not $disableOutput ) {
@@ -2968,7 +2959,8 @@ sub GetImageInfo($$) {
                 next unless defined $val;
                 if ( $structOpt and ref $val ) {
                     $val = Image::ExifTool::XMP::SerializeStruct( $et, $val )
-                      unless $xml or $json;
+                      unless $xml
+                      or $json;
                 }
                 elsif ( ref $val eq 'ARRAY' ) {
                     if ( defined $listItem ) {
@@ -3023,7 +3015,7 @@ sub GetImageInfo($$) {
                         }
                         elsif ($json) {
                             print $fp "\n  $ket" if $lastGroup;
-                            print $fp ','        if $lastGroup or $comma;
+                            print $fp ',' if $lastGroup or $comma;
                             print $fp qq(\n  "$group"$sep $bra);
                             undef $comma;
                             undef %noDups;
@@ -3211,7 +3203,7 @@ sub GetImageInfo($$) {
                         $id = sprintf( '0x%.4x', $id )
                           if $showTagID eq 'H' and $id =~ /^\d+$/;
                         $$val{lang} = $lang if $lang;
-                        $$val{id}   = $id;
+                        $$val{id} = $id;
                     }
                     if ($tabFormat) {
                         $$val{table} = $et->GetTableName($tag);
@@ -3254,8 +3246,8 @@ sub GetImageInfo($$) {
             my $id;
             if ($showTagID) {
                 $id = $et->GetTagID($tag);
-                if ( $id =~ /^(\d+)(\.\d+)?$/ ) {
-                    $id = sprintf( "0x%.4x", $1 ) if $showTagID eq 'H';
+                if ( $id =~ /^(\d+)(\.\d+)?$/ ) { $id = sprintf( "0x%.4x", $1 )
+                      if $showTagID eq 'H';
                 }
                 else {
                     $id = '-';
@@ -3283,7 +3275,7 @@ sub GetImageInfo($$) {
                 my $buff = '';
                 if ($tabFormat) {
                     $buff = "$group\t" if defined $group;
-                    $buff .= "$id\t"   if $showTagID;
+                    $buff .= "$id\t" if $showTagID;
                     if ( $outFormat <= 1 ) {
                         $buff .= "$desc\t$val\n";
                     }
@@ -3294,8 +3286,8 @@ sub GetImageInfo($$) {
                         $line = $val;
                     }
                 }
-                elsif ( $outFormat < 0 ) {
-                    $buff = "[$group] " if defined $group;
+                elsif ( $outFormat < 0 ) { $buff = "[$group] "
+                      if defined $group;
                     $buff .= "$id " if $showTagID;
                     $buff .= "$desc\n      $val\n";
                 }
@@ -3304,7 +3296,7 @@ sub GetImageInfo($$) {
                     my $len = 0;
                     if ( defined $group ) {
                         $buff = sprintf( "%-15s ", "[$group]" );
-                        $len  = 16;
+                        $len = 16;
                     }
                     if ($showTagID) {
                         $wid = ( $showTagID eq 'D' ) ? 5 : 6;
@@ -3324,9 +3316,9 @@ sub GetImageInfo($$) {
                 }
                 elsif ($argFormat) {
                     $buff = '-';
-                    $buff    .= "$group:" if defined $group;
-                    $tagName .= '#'       if $tag =~ /#/;
-                    $buff    .= "$tagName=$val\n";
+                    $buff .= "$group:" if defined $group;
+                    $tagName .= '#' if $tag =~ /#/;
+                    $buff .= "$tagName=$val\n";
                 }
                 else {
                     $buff = "$group " if defined $group;
@@ -3368,15 +3360,15 @@ sub GetImageInfo($$) {
     }
     if ( defined $outfile ) {
         if ( $textOverwrite & 0x02 ) {
-            $outComma{$outfile}                                    = $comma;
-            $outTrailer{$outfile}                                  = '';
+            $outComma{$outfile}   = $comma;
+            $outTrailer{$outfile} = '';
             $outTrailer{$outfile} .= $sectTrailer and $sectTrailer = ''
               if $sectTrailer;
             $outTrailer{$outfile} .= $fileTrailer if $fileTrailer;
         }
         else {
             print $fp $sectTrailer and $sectTrailer = '' if $sectTrailer;
-            print $fp $fileTrailer                       if $fileTrailer;
+            print $fp $fileTrailer if $fileTrailer;
         }
         close($fp);
         undef $tmpText;
@@ -3397,9 +3389,9 @@ sub GetImageInfo($$) {
 }
 
 sub SetImageInfo($$$) {
-    my ( $et,      $file,     $orig ) = @_;
+    my ( $et, $file, $orig ) = @_;
     my ( $outfile, $restored, $isTemporary, $isStdout, $outType, $tagsFromSrc );
-    my ( $hardLink, $symLink, $testName,    $sameFile );
+    my ( $hardLink, $symLink, $testName, $sameFile );
     my $infile = $file;
 
     if ( defined $tmpFile ) {
@@ -3495,7 +3487,7 @@ sub SetImageInfo($$$) {
                 my ( $fromFile, $setTags );
                 if ( $dyFile eq '@' ) {
                     $fromFile = $orig;
-                    $setTags  = $tagsFromSrc || $setTags{$dyFile};
+                    $setTags = $tagsFromSrc || $setTags{$dyFile};
                 }
                 else {
                     $fromFile = FilenameSPrintf( $dyFile, $orig );
@@ -3661,7 +3653,7 @@ sub SetImageInfo($$$) {
         $symLink  = $et->GetNewValues('SymLink');
         $testName = $et->GetNewValues('TestName');
         $hardLink = FilenameSPrintf( $hardLink, $orig ) if defined $hardLink;
-        $symLink  = FilenameSPrintf( $symLink,  $orig ) if defined $symLink;
+        $symLink  = FilenameSPrintf( $symLink, $orig ) if defined $symLink;
         my $newFileName = $et->GetNewValues('FileName');
         my $newDir      = $et->GetNewValues('Directory');
         if ( defined $newFileName and not length $newFileName ) {
@@ -3671,7 +3663,8 @@ sub SetImageInfo($$$) {
         if ( defined $testName ) {
             my $err;
             $err = "You shouldn't write FileName or Directory with TestFile"
-              if defined $newFileName or defined $newDir;
+              if defined $newFileName
+              or defined $newDir;
             $err = "The -o option shouldn't be used with TestFile"
               if defined $outfile;
             $err
@@ -3700,7 +3693,7 @@ sub SetImageInfo($$$) {
                 }
             }
             if ($newDir) {
-                $newDir  = FilenameSPrintf( $newDir, $orig );
+                $newDir = FilenameSPrintf( $newDir, $orig );
                 $outfile = Image::ExifTool::GetNewFileName(
                     defined $outfile ? $outfile : $file, $newDir );
             }
@@ -3708,7 +3701,7 @@ sub SetImageInfo($$$) {
             if ( $et->Exists( $outfile, 1 ) ) {
                 if ( $infile eq $outfile ) {
                     undef $outfile;
-
+                    ;
                 }
                 elsif ( $et->IsSameFile( $infile, $outfile ) ) {
                     $sameFile = $outfile;
@@ -3764,7 +3757,7 @@ sub SetImageInfo($$$) {
             if ( $numSet == $numPseudo ) {
                 my ( $r0, $r1, $r2, $r3 ) = ( 0, 0, 0, 0 );
                 if ( defined $outfile ) {
-                    $r0   = $et->SetFileName( $file, $outfile );
+                    $r0 = $et->SetFileName( $file, $outfile );
                     $file = $$et{NewName} if $r0 > 0;
                 }
                 unless ( $r0 < 0 ) {
@@ -3906,7 +3899,7 @@ sub SetImageInfo($$$) {
                         }
                         undef $critical;
                         SigInt() if $interrupted;
-
+                        
                     }
                     elsif ( $et->Rename( $tmpFile, $dstFile ) ) {
                         EFile( $infile, 3 );
@@ -3915,8 +3908,7 @@ sub SetImageInfo($$$) {
                     else {
                         my $newFile = $tmpFile;
                         undef $tmpFile;
-
-                        if ( not $et->Unlink($file) ) {
+                         if ( not $et->Unlink($file) ) {
                             Warn "Error renaming temporary file to $dstFile\n";
                             EFile($infile);
                             $et->Unlink($newFile);
@@ -4096,17 +4088,13 @@ sub EscapeJSON($;$) {
         return '"base64:' . Image::ExifTool::XMP::EncodeBase64( $str, 1 ) . '"';
     }
     $str =~ s/(["\t\n\r\\])/\\$jsonChar{$1}/sg;
-    if ( $json < 2 ) {
-        $str =~ tr/\0//d;
-
-        $str =~ s/([\0-\x1f\x7f])/sprintf("\\u%.4X",ord $1)/sge;
+    if ( $json < 2 ) { $str =~ tr/\0//d;
+         $str =~ s/([\0-\x1f\x7f])/sprintf("\\u%.4X",ord $1)/sge;
         Image::ExifTool::XMP::FixUTF8( \$str ) unless $altEnc;
     }
-    else {
-        $str =~ s/\0+$// unless $isBinary;
-
-        $str =~ s/\$/\\\$/sg;
-        $str =~ s/([\0-\x1f\x7f])/sprintf("\\x%.2X",ord $1)/sge;
+    else { $str =~ s/\0+$// unless $isBinary;
+         $str =~ s/\$/\\\$/sg;
+        $str  =~ s/([\0-\x1f\x7f])/sprintf("\\x%.2X",ord $1)/sge;
     }
     return '"' . $str . '"';
 }
@@ -4142,7 +4130,7 @@ sub FormatJSON($$$;$) {
             my $key = EscapeJSON( $_, 1 );
             print $fp qq(\n$ind  $key$sep );
             if (    $showTagID
-                and $_ eq 'id'
+                and $_         eq 'id'
                 and $showTagID eq 'H'
                 and $$val{$_} =~ /^\d+\.\d+$/ )
             {
@@ -4164,11 +4152,9 @@ sub FormatCSV($) {
     my $val = shift;
     if (
         $setCharset
-        and (
-            $val =~ /[^\x09\x0a\x0d\x20-\x7e\x80-\xff]/
+        and ( $val =~ /[^\x09\x0a\x0d\x20-\x7e\x80-\xff]/
             or
-            ( $setCharset eq 'UTF8' and Image::ExifTool::IsUTF8( \$val ) < 0 )
-        )
+            ( $setCharset eq 'UTF8' and Image::ExifTool::IsUTF8( \$val ) < 0 ) )
       )
     {
         $val = 'base64:' . Image::ExifTool::XMP::EncodeBase64( $val, 1 );
@@ -4355,8 +4341,7 @@ sub AddSetTagsFile($;$) {
         push @{ $setTagsList{$setFile} }, $setTags{$setFile};
     }
     $setTags{$setFile} = [];
-
-    push @newValues, { SaveCount => ++$saveCount }, "TagsFromFile=$setFile";
+      push @newValues, { SaveCount => ++$saveCount }, "TagsFromFile=$setFile";
     $opts or $opts = {};
     $$opts{ProtectSaved} = $saveCount;
     push @{ $setTags{$setFile} }, $opts;
@@ -4389,7 +4374,7 @@ sub DoSetFromFile($$$) {
     local $_;
     my ( $et, $file, $setTags ) = @_;
     $verbose and print $vout "Setting new values from $file\n";
-    my $info   = $et->SetNewValuesFromFile( Infile( $file, 1 ), @$setTags );
+    my $info = $et->SetNewValuesFromFile( Infile( $file, 1 ), @$setTags );
     my $numSet = scalar( keys %$info );
     if ( $$info{Error} ) {
         my @warns = grep /^(Error|Warning)\b/, keys %$info;
@@ -4514,7 +4499,7 @@ sub ProcessFiles($;$) {
             }
         }
         $et->Options( CharsetFileName => $enc ) if $utf8FileName{$file};
-        last                                    if $end;
+        last if $end;
     }
 }
 
@@ -4538,7 +4523,7 @@ sub ScanDir($$;$) {
             if ( eval { require Win32::FindFile } ) {
                 eval {
                     @fileList = Win32::FindFile::ReadDir($dir);
-                    $_        = $_->cFileName foreach @fileList;
+                    $_ = $_->cFileName foreach @fileList;
                 };
                 $@ and $evalWarning = $@;
                 if ($evalWarning) {
@@ -4589,8 +4574,7 @@ sub ScanDir($$;$) {
         }
         next if $endThisDir;
         next if $ignoreHidden and $file =~ /^\./;
-
-        my $accepted;
+         my $accepted;
         if ($filterFlag) {
             $accepted = AcceptFile($file) or next;
             $accepted &= 0x01;
@@ -4853,14 +4837,14 @@ sub LoadPrintFormat($;$) {
 sub FilenameSPrintf($;$@) {
     my ( $fmt, $file, @extra ) = @_;
     local $_;
-    return $fmt  unless $fmt =~ /%[-+]?\d*[.:]?\d*[lu]?[dDfFeEtgso]/;
+    return $fmt unless $fmt =~ /%[-+]?\d*[.:]?\d*[lu]?[dDfFeEtgso]/;
     return undef unless defined $file;
     CleanFilename($file);
-
-    my %part;
+     my %part;
     @part{qw(d f E)} = ( $file =~ /^(.*?)([^\/]*?)(\.[^.\/]*)?$/ );
     defined $part{f}
       or Warn("Error: Bad pattern match for file $file\n"), return undef;
+
     if ( $part{E} ) {
         $part{e} = substr( $part{E}, 1 );
     }
@@ -4879,7 +4863,7 @@ sub FilenameSPrintf($;$@) {
         my ( @path, $part, $len, $groups );
         if ( lc $code eq 'd' and $dot and $dot eq ':' ) {
             @path = split '/', $part{$code};
-            $len  = scalar @path;
+            $len = scalar @path;
         }
         else {
             if ( $code eq 'g' ) {
@@ -4892,7 +4876,7 @@ sub FilenameSPrintf($;$@) {
             $len = length $part{$code};
         }
         next unless $skip < $len;
-        $wid  = $len - $skip        if $wid eq '' or $wid + $skip > $len;
+        $wid = $len - $skip if $wid eq '' or $wid + $skip > $len;
         $skip = $len - $wid - $skip if $sign eq '-';
         if (@path) {
             $part = join( '/', @path[ $skip .. ( $skip + $wid - 1 ) ] );
@@ -4905,16 +4889,15 @@ sub FilenameSPrintf($;$@) {
         $filename .= $part;
     }
     $filename .= substr( $fmt, $pos );
-
-    $filename =~ s{(?!^)//}{/}g;
+     $filename =~ s{(?!^)//}{/}g;
     return $filename;
 }
 
 sub Num2Alpha($) {
-    my $num   = shift;
+    my $num = shift;
     my $alpha = chr( 97 + ( $num % 26 ) );
     while ( $num >= 26 ) {
-        $num   = int( $num / 26 ) - 1;
+        $num = int( $num / 26 ) - 1;
         $alpha = chr( 97 + ( $num % 26 ) ) . $alpha;
     }
     return $alpha;
@@ -4956,14 +4939,13 @@ sub NextUnusedFilename($;$) {
                 $filename .= $str;
             }
             else {
-                my $c   = $tok eq 'C' ? $seq : $copy;
+                my $c = $tok eq 'C' ? $seq : $copy;
                 my $num = $c + ( $mod ? 1 : 0 );
                 $filename .= $wid ? sprintf( "%.${wid}d", $num ) : $num;
             }
         }
         $filename .= substr( $fmt, $pos );
-
-        return $filename
+         return $filename
           unless ( $mt->Exists( $filename, 1 )
             and not defined $usedFileName{$filename} )
           or $usedFileName{$filename};
@@ -5042,7 +5024,7 @@ sub OpenOutputFile($;@) {
 
 sub AcceptFile($) {
     my $file = shift;
-    my $ext  = ( $file =~ /^.*\.(.+)$/s ) ? uc($1) : '';
+    my $ext = ( $file =~ /^.*\.(.+)$/s ) ? uc($1) : '';
     return $filterExt{$ext} if defined $filterExt{$ext};
     return $filterExt{'*'}  if defined $filterExt{'*'};
     return 0                if $filterFlag & 0x02;
@@ -5056,7 +5038,7 @@ sub SlurpFile($$) {
     binmode(INFILE);
     undef $$buffPt;
     my $bsize = 1024 * 1024;
-    my $num   = read( INFILE, $$buffPt, $bsize );
+    my $num = read( INFILE, $$buffPt, $bsize );
     unless ( defined $num ) {
         close(INFILE);
         Warn("Error reading $file\n");
@@ -5076,11 +5058,9 @@ sub SlurpFile($$) {
 
 sub FilterArgfileLine($) {
     my $arg = shift;
-    if ( $arg =~ /^#/ ) {
-        return undef unless $arg =~ s/^#\[CSTR\]//;
+    if ( $arg =~ /^#/ ) { return undef unless $arg =~ s/^#\[CSTR\]//;
         $arg =~ s/[\x0d\x0a]+$//s;
-
-        $arg =~ s{\\(.)|(["\$\@]|\\$)}{'\\'.($2 || $1)}sge;
+           $arg =~ s{\\(.)|(["\$\@]|\\$)}{'\\'.($2 || $1)}sge;
         my %esc = (
             a    => "\a",
             b    => "\b",
@@ -5094,10 +5074,9 @@ sub FilterArgfileLine($) {
         $arg =~ s/\\(.)/$esc{$1}||'\\'.$1/egs;
     }
     else {
-        $arg =~ s/^\s+//;
-        $arg =~ s/[\x0d\x0a]+$//s;
-
-        $arg =~ s/^(-[-_0-9A-Z:]+#?)\s*([-+<]?=) ?/$1$2/i;
+        $arg  =~ s/^\s+//;
+        $arg  =~ s/[\x0d\x0a]+$//s;
+         $arg =~ s/^(-[-_0-9A-Z:]+#?)\s*([-+<]?=) ?/$1$2/i;
         return undef if $arg eq '';
     }
     return $arg;
@@ -5145,8 +5124,7 @@ sub ReadStayOpen($) {
                 last;
             }
             next unless $pos;
-
-            $stayOpenBuff = substr( $stayOpenBuff, $pos );
+             $stayOpenBuff = substr( $stayOpenBuff, $pos );
             if ($processArgs) {
                 unshift @$args, @newArgs;
                 last;

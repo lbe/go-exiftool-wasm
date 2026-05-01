@@ -83,7 +83,9 @@ From the build output directory, install these into **this** repo under `embed/`
 
 Use the **`zeroperl.wasm`** artifact (reactor **with** asyncify) unless you intentionally switch runtimes. If you disable ExifTool in zeroperl (`BUILD_EXIFTOOL=false`), you must supply `exiftool.min.pl` yourself.
 
-zeroperl’s README also documents **build arguments** (`PERL_VERSION`, `EXIFTOOL_VERSION`, `BUILD_EXIFTOOL`, memory/stack, etc.). If you change **`PERL_VERSION`**, update the hard-coded **`PERL5LIB`** paths in `exiftool.go` and `server.go` so the version segment (e.g. `5.42.0`) matches the tree under `embed/perl-wasi-prefix/lib/`.
+zeroperl’s README also documents **build arguments** (`PERL_VERSION`, `EXIFTOOL_VERSION`, `BUILD_EXIFTOOL`, memory/stack, etc.). At runtime this package auto-detects the version directory under `embed/perl-wasi-prefix/lib/` and sets `PERL5LIB` to `/zeroperl/lib/<version>:/zeroperl/lib/<version>/wasm32-wasi` when present.
+
+At runtime, the package prefers an external `exiftool.min.pl` from the mounted guest filesystem when present and falls back to the embedded `embed/exiftool.min.pl` script.
 
 ## License
 

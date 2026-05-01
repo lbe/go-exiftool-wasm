@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,11 +69,15 @@ var (
 	cachedDefaultRootFS = sync.OnceValue(func() fs.FS {
 		return &overlayFS{layers: []fs.FS{perlFS(), os.DirFS(".")}}
 	})
-	cachedWrappedExiftoolScript = sync.OnceValue(func() []byte {
+	cachedWrappedEmbeddedExiftoolScript = sync.OnceValue(func() []byte {
 		wrapped := make([]byte, len(scriptPreamble)+len(exiftoolScript))
 		copy(wrapped, scriptPreamble)
 		copy(wrapped[len(scriptPreamble):], exiftoolScript)
 		return wrapped
+	})
+	cachedEmbeddedPerlVersion = sync.OnceValue(func() string {
+		version, _ := detectPerlLibVersion(perlFS())
+		return version
 	})
 )
 
@@ -264,6 +269,68 @@ func compileContext(ctx context.Context) context.Context {
 	return experimental.WithCompilationWorkers(ctx, runtimeCompilationWorkers())
 }
 
+func detectPerlLibVersion(fsys fs.FS) (string, bool) {
+	entries, err := fs.ReadDir(fsys, "lib")
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || name == "" {
+			continue
+		}
+		// Version dirs are numeric dotted names like 5.16.3.
+		if name[0] < '0' || name[0] > '9' || !strings.Contains(name, ".") {
+			continue
+		}
+		return name, true
+	}
+	return "", false
+}
+
+func embeddedPerlLibVersion() (string, bool) {
+	version := cachedEmbeddedPerlVersion()
+	return version, version != ""
+}
+
+func perl5LibEnv(version string) string {
+	return "/zeroperl/lib/" + version + ":/zeroperl/lib/" + version + "/wasm32-wasi"
+}
+
+func wrapExiftoolScript(script []byte) []byte {
+	wrapped := make([]byte, len(scriptPreamble)+len(script))
+	copy(wrapped, scriptPreamble)
+	copy(wrapped[len(scriptPreamble):], script)
+	return wrapped
+}
+
+func resolveExiftoolScript(rootFS, workFS fs.FS) []byte {
+	candidates := []struct {
+		fsys fs.FS
+		path string
+	}{
+		{fsys: rootFS, path: "exiftool.min.pl"},
+		{fsys: rootFS, path: "embed/exiftool.min.pl"},
+		{fsys: workFS, path: "exiftool.min.pl"},
+		{fsys: workFS, path: "embed/exiftool.min.pl"},
+	}
+
+	for _, candidate := range candidates {
+		if candidate.fsys == nil {
+			continue
+		}
+		script, err := fs.ReadFile(candidate.fsys, candidate.path)
+		if err != nil {
+			continue
+		}
+		if len(strings.TrimSpace(string(script))) == 0 {
+			continue
+		}
+		return wrapExiftoolScript(script)
+	}
+	return cachedWrappedEmbeddedExiftoolScript()
+}
+
 // commandArgs builds argv for [Command]: optional [Arg1], optional "-config" [Config],
 // "-charset filename=utf8", then caller arguments.
 func commandArgs(arg []string) []string {
@@ -369,6 +436,9 @@ func evalModule(ctx context.Context, r wazero.Runtime, compiled wazero.CompiledM
 	fsConfig := wazero.NewFSConfig().
 		WithFSMount(rootFS, "/").
 		WithFSMount(devFS, "/dev")
+	if _, ok := embeddedPerlLibVersion(); ok {
+		fsConfig = fsConfig.WithFSMount(perlFS(), "/zeroperl")
+	}
 	if workFS != nil {
 		fsConfig = fsConfig.WithFSMount(workFS, "/work")
 	}
@@ -383,8 +453,10 @@ func evalModule(ctx context.Context, r wazero.Runtime, compiled wazero.CompiledM
 		WithName("zeroperl").
 		WithArgs("zeroperl").
 		WithStartFunctions().
-		WithEnv("PERL5LIB", "/lib/5.42.0:/lib/5.42.0/wasm32-wasi").
 		WithFSConfig(fsConfig)
+	if version, ok := embeddedPerlLibVersion(); ok {
+		config = config.WithEnv("PERL5LIB", perl5LibEnv(version))
+	}
 
 	mod, err := r.InstantiateModule(ctx, compiled, config)
 	if err != nil {
@@ -411,7 +483,7 @@ func evalModule(ctx context.Context, r wazero.Runtime, compiled wazero.CompiledM
 		return nil, fmt.Errorf("required wasm exports not found")
 	}
 
-	scriptPtr, argvPtr, allocPtr, err := packGuestEvalData(ctx, mallocFn, freeFn, mem, cachedWrappedExiftoolScript(), args)
+	scriptPtr, argvPtr, allocPtr, err := packGuestEvalData(ctx, mallocFn, freeFn, mem, resolveExiftoolScript(rootFS, workFS), args)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate script memory: %w", err)
 	}
