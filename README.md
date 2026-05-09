@@ -1,6 +1,12 @@
 # go-exiftool: ExifTool in Go (zeroperl + wasm2go)
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/lbe/go-exiftool.svg)](https://pkg.go.dev/github.com/lbe/go-exiftool)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lbe/go-exiftool-wasm.svg)](https://pkg.go.dev/github.com/lbe/go-exiftool-wasm)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go Version](https://img.shields.io/badge/Go-1.26.0-blue.svg)](https://go.dev/dl/)
+[![Go Report Card](https://goreportcard.com/badge/github.com/lbe/go-exiftool-wasm)](https://goreportcard.com/report/github.com/lbe/go-exiftool-wasm)
+[![Release](https://img.shields.io/github/v/release/lbe/go-exiftool-wasm)](https://github.com/lbe/go-exiftool-wasm/releases)
+[![CI](https://github.com/lbe/go-exiftool-wasm/actions/workflows/go.yml/badge.svg)](https://github.com/lbe/go-exiftool-wasm/actions/workflows/go.yml)
+[![codecov](https://codecov.io/gh/lbe/go-exiftool-wasm/branch/main/graph/badge.svg)](https://codecov.io/gh/lbe/go-exiftool-wasm)
 
 Go library that runs **[ExifTool](https://exiftool.org/)** in-process: embedded **Perl** via **[zeroperl](https://github.com/uswriting/zeroperl)** (Perl compiled to **WebAssembly**), executed as native Go via a wasm2go-generated module. You do **not** need a system `exiftool` binary or a separate Perl install.
 
