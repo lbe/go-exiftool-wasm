@@ -15,7 +15,7 @@ Upstream ExifTool (Phil Harvey) and metadata: [exiftool.org](https://exiftool.or
 ## Requirements
 
 - **Go 1.26+**
-- Dependencies: `github.com/lbe/cfsread` (see `go.mod`).
+- Dependencies are listed in `go.mod`.
 
 ## Usage
 
@@ -45,7 +45,7 @@ go test ./... -timeout 10m   # includes WASM tests; allow several minutes
 
 ### Refreshing `embed/` from zeroperl
 
-The generated zeroperl Go source, Perl install prefix, and minified ExifTool script come from **[zeroperl](https://github.com/uswriting/zeroperl)**. Follow that repository’s **Build** section (Docker or Apple Container): build the image, run the container, and copy **`/artifacts`** into a host directory (as shown there, e.g. `./output/`).
+The generated zeroperl Go source and Perl install prefix come from **[zeroperl](https://github.com/uswriting/zeroperl)**. Follow that repository’s **Build** section (Docker or Apple Container): build the image, run the container, and copy **`/artifacts`** into a host directory (as shown there, e.g. `./output/`).
 
 From the build output directory, install these into **this** repo under `embed/`:
 
@@ -53,13 +53,26 @@ From the build output directory, install these into **this** repo under `embed/`
 | --------------------------------- | ------------------------- |
 | `zeroperl.go`                     | `zeroperl/zeroperl.go`    |
 | `perl-wasi-prefix/` (entire tree) | `embed/perl-wasi-prefix/` |
-| `exiftool.min.pl`                 | `embed/exiftool.min.pl`   |
 
-Use the generated **`zeroperl.go`** artifact unless you intentionally switch runtimes. If you disable ExifTool in zeroperl (`BUILD_EXIFTOOL=false`), you must supply `exiftool.min.pl` yourself.
+Use the generated **`zeroperl.go`** artifact unless you intentionally switch runtimes. The ExifTool script is loaded from `embed/perl-wasi-prefix/bin/exiftool` in the embedded prefix.
 
 After copying `perl-wasi-prefix/` into `embed/`, run **`go generate ./...`** to re-compress the tree with `cfsread-lz4`. This updates the LZ4-compressed files in place so the embedded binary reflects the new Perl build.
 
-zeroperl’s README also documents **build arguments** (`PERL_VERSION`, `EXIFTOOL_VERSION`, `BUILD_EXIFTOOL`, memory/stack, etc.). If you change **`PERL_VERSION`**, update the **`Perl5Lib`** constant in [perlversion.go](perlversion.go) so the version segment matches the tree under `embed/perl-wasi-prefix/lib/`.
+zeroperl’s README also documents **build arguments** (`PERL_VERSION`, `EXIFTOOL_VERSION`, `BUILD_EXIFTOOL`, memory/stack, etc.). If you change **`PERL_VERSION`**, update the **`Perl5Lib`** constant in [perlversion.go](perlversion.go) so the runtime `PERL5LIB` path segment (`/lib/<Perl5Lib>`) stays aligned with the embedded prefix.
+
+### Building ExifTool prefix with `dist.pl`
+
+Use `dist.pl` to download, build, minify, test, and install ExifTool into `embed/perl-wasi-prefix/`.
+
+```bash
+perl dist.pl --exiftool-version 13.56
+```
+
+Version resolution precedence is:
+
+1. `--exiftool-version`
+2. `EXIFTOOL_VERSION` environment variable
+3. Latest version parsed from `https://exiftool.org/history.html`
 
 ## License
 

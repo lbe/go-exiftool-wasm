@@ -28,16 +28,16 @@ var (
 	perlCachedFSOnce sync.Once
 )
 
-// exiftoolScript holds the minified ExifTool Perl driver script loaded at
-// compile time from embed/exiftool.min.pl.
-//
-//go:embed embed/exiftool.min.pl
-var exiftoolScript []byte
+const exiftoolScriptPath = "/bin/exiftool"
 
-// scriptPreamble is prepended to exiftoolScript before eval. It enables
-// autoflush on STDOUT and STDERR so the host sees output immediately
-// without waiting for Perl's default block buffering.
-const scriptPreamble = "use IO::Handle; STDOUT->autoflush(1); STDERR->autoflush(1);\n"
+// exiftoolEvalWrapper executes the embedded /bin/exiftool script via do().
+// It prepares autoflush, script name, and @INC for the perl-wasi-prefix tree.
+const exiftoolEvalWrapper = "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); unshift @INC, '/lib/perl5', '/lib/perl5/wasm32-wasi'; $0 = '/bin/exiftool'; } my $ok = do '" + exiftoolScriptPath + "'; die $@ if $@; die $! if !defined $ok;\n"
+
+// scriptPreamble is prepended before eval. It enables autoflush on STDOUT and
+// STDERR without loading additional modules, and restores the previously
+// selected default output handle so unqualified print still goes to STDOUT.
+const scriptPreamble = "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); }\n"
 
 // overlayFS implements fs.FS by trying each layer in order; the first layer
 // that can open the name wins. Earlier layers (lower index) shadow later
@@ -252,7 +252,7 @@ func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []by
 	}
 
 	mem := ws.mem()
-	wrapper := scriptPreamble + string(exiftoolScript)
+	wrapper := []byte(exiftoolEvalWrapper)
 	scriptPtr := mod.Xmalloc(int32(len(wrapper) + 1))
 	copy(mem[scriptPtr:], wrapper)
 	mem[scriptPtr+int32(len(wrapper))] = 0
@@ -279,7 +279,7 @@ func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []by
 		defer mod.Xfree(argvPtr)
 	}
 
-	mod.Xzeroperl_eval(scriptPtr, 1, int32(len(args)), argvPtr)
+	mod.Xzeroperl_eval(scriptPtr, 0, int32(len(args)), argvPtr)
 
 	if dio, ok := ws.guestIO.(*DirectIO); ok {
 		return append([]byte(nil), dio.StdoutB.Bytes()...), nil

@@ -206,10 +206,17 @@ func (e *Server) start() error {
 	mem := ws.mem()
 
 	if err := initModule(mod, sio); err != nil {
+		_ = closeAll(sio.stdinW, sio.stdoutR)
+		e.mod = nil
+		e.wasi = nil
+		e.stdinW = nil
+		e.stdoutR = nil
+		e.sio = nil
+		e.stdout = nil
 		return err
 	}
 
-	wrapper := scriptPreamble + string(exiftoolScript)
+	wrapper := []byte(exiftoolEvalWrapper)
 	scriptPtr := mod.Xmalloc(int32(len(wrapper) + 1))
 	copy(mem[scriptPtr:], wrapper)
 	mem[scriptPtr+int32(len(wrapper))] = 0
@@ -249,7 +256,7 @@ func (e *Server) start() error {
 			}
 		}()
 
-		mod.Xzeroperl_eval(scriptPtr, 1, int32(len(e.args)), argvPtr)
+		mod.Xzeroperl_eval(scriptPtr, 0, int32(len(e.args)), argvPtr)
 
 		mod.Xfree(scriptPtr)
 		for _, p := range argPtrs {

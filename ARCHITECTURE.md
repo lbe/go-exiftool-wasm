@@ -40,9 +40,10 @@ flowchart TB
 | Asset                  | Binding          | Role                                                                               |
 | ---------------------- | ---------------- | ---------------------------------------------------------------------------------- |
 | embed/perl-wasi-prefix | go:embed all     | Perl stdlib and wasm32-wasi modules (LZ4-compressed)                               |
-| embed/exiftool.min.pl  | go:embed         | ExifTool driver script                                                             |
 | zeroperl/zeroperl.go   | generated source | Native Go representation of zeroperl guest module                                  |
 | cachefs.go             | package source   | internal cachedFS wrapper; transparent LZ4 decompression and LRU cache via cfsread |
+
+The ExifTool driver script is loaded from `embed/perl-wasi-prefix/bin/exiftool` inside the embedded perl-wasi-prefix tree.
 
 The guest environment includes PERL5LIB=/lib/5.16.3:/lib/5.16.3/wasm32-wasi.
 
@@ -67,7 +68,7 @@ Mounts are configured per module instantiation:
 - /work is optionally mounted when Run is called with workFS.
 - Writable host directories are mounted with hostRoot metadata for operations such as path_open and path_rename.
 
-`perlFS()` returns a process-level internal cachedFS singleton (initialized once via `sync.Once`) backed by a `cfsread.Reader` with LZ4 magic-byte decompression and a 2000-entry LRU cache. The `embed/perl-wasi-prefix` tree is stored LZ4-compressed in the binary; files are decompressed on first access and subsequent reads are served from the in-memory cache with zero allocations. Concurrent accesses to the same path are coalesced via singleflight.
+`perlFS()` returns a process-level internal cachedFS singleton (initialized once via `sync.Once`) backed by a `cfsread.Reader` with LZ4 magic-byte decompression and a 2000-entry LRU cache. The `embed/perl-wasi-prefix` tree is stored LZ4-compressed in the binary; files are decompressed on first access and subsequent reads are served from the in-memory cache with zero allocations.
 
 ## I/O model
 
