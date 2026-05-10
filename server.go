@@ -11,7 +11,7 @@ import (
 	"os"
 	"sync"
 
-	wasm2go "github.com/lbe/go-exiftool-wasm/zeroperl"
+	wasm2go "github.com/lbe/go-exiftool-wasm/internal/zeroperl"
 )
 
 // boundary is the unique token used in the ExifTool -stay_open protocol to
@@ -68,7 +68,7 @@ type Server struct {
 	evalErr  error
 }
 
-// serverIO is the [GuestIO] adapter for Server mode. It uses real [os.Pipe]
+// serverIO is the guest I/O adapter for Server mode. It uses real [os.Pipe]
 // pairs for stdin and stdout so that the long-running zeroperl eval goroutine
 // can stream data to/from [Server.Command] callers. stderr is captured
 // in-memory and drained on each command for error reporting.

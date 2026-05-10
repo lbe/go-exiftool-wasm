@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	wasm2go "github.com/lbe/go-exiftool-wasm/zeroperl"
+	wasm2go "github.com/lbe/go-exiftool-wasm/internal/zeroperl"
 )
 
 // WASI error codes returned to the guest. Values follow the WASI snapshot-preview1
@@ -100,7 +100,7 @@ type mountEntry struct {
 
 // wasiState implements the WASI snapshot-preview1 host functions expected by
 // the zeroperl wasm2go module. It owns the file-descriptor table, mount list,
-// and the [GuestIO] adapter for stdin/stdout/stderr. It also satisfies the
+// and the guest I/O adapter for stdin/stdout/stderr. It also satisfies the
 // Xenv interface (Xcall_host_function) required by the generated module.
 //
 // All WASI X_ methods operate on the module's linear memory directly via
@@ -112,7 +112,7 @@ type mountEntry struct {
 //     interpreter lifetime.
 //   - Only that goroutine may access or mutate mutable fd state (fds,
 //     preopen-backed fd entries, and per-fd offsets).
-//   - Other goroutines may communicate with the interpreter only via GuestIO
+//   - Other goroutines may communicate with the interpreter only via guestIO
 //     pipes/readers, never by touching wasiState internals directly.
 //
 // Set EXIFTOOL_WASI_ASSERT_OWNER=1 to enable runtime ownership assertions.
@@ -120,7 +120,7 @@ type wasiState struct {
 	module   *wasm2go.Module
 	fds      []fdEntry
 	mounts   []mountEntry
-	guestIO  GuestIO
+	guestIO  guestIO
 	preopens []fdEntry
 	trace    bool
 	env      []string // cached PERL5LIB environment entries
@@ -132,10 +132,10 @@ type wasiState struct {
 
 // initWASIState populates ws with file-descriptor table entries and preopen
 // mappings for the given module, I/O adapter, and mount list.
-func initWASIState(ws *wasiState, mod *wasm2go.Module, guestIO GuestIO, mounts []mountEntry) {
+func initWASIState(ws *wasiState, mod *wasm2go.Module, gio guestIO, mounts []mountEntry) {
 	ws.module = mod
 	ws.mounts = mounts
-	ws.guestIO = guestIO
+	ws.guestIO = gio
 	ws.fds = make([]fdEntry, 3+len(mounts), 8+len(mounts))
 	ws.fds[0] = fdEntry{fdType: fdCharDev, path: "stdin"}
 	ws.fds[1] = fdEntry{fdType: fdCharDev, path: "stdout"}
@@ -144,7 +144,7 @@ func initWASIState(ws *wasiState, mod *wasm2go.Module, guestIO GuestIO, mounts [
 		ws.preopens = append(ws.preopens, fdEntry{path: m.guestPath, fdType: fdDir, mount: i, preopen: true})
 		ws.fds[3+i] = fdEntry{path: m.guestPath, fdType: fdDir, mount: i, preopen: true}
 	}
-	ws.env = []string{"PERL5LIB=/lib/" + Perl5Lib + ":/lib/" + Perl5Lib + "/wasm32-wasi"}
+	ws.env = []string{"PERL5LIB=/lib/" + perl5Lib + ":/lib/" + perl5Lib + "/wasm32-wasi"}
 	ws.assertOwner = os.Getenv("EXIFTOOL_WASI_ASSERT_OWNER") == "1"
 }
 

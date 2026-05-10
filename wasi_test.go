@@ -13,7 +13,7 @@ import (
 // directives. args are passed as @ARGV to the script. os.TempDir() is mounted
 // read-write so the script can perform file I/O there.
 func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
-	guestIO := NewDirectIO(nil)
+	guestIO := newDirectIO(nil)
 	mod, ws, err := newModule(guestIO, defaultRootFS(), nil, []string{os.TempDir()})
 	if err != nil {
 		return nil, err
@@ -23,12 +23,12 @@ func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 		if r := recover(); r != nil {
 			if ep, ok := r.(exitPanic); ok {
 				if ep.code == 0 {
-					if dio, ok := ws.guestIO.(*DirectIO); ok {
+					if dio, ok := ws.guestIO.(*directIO); ok {
 						stdout = append([]byte(nil), dio.StdoutB.Bytes()...)
 					}
 					return
 				}
-				dio := ws.guestIO.(*DirectIO)
+				dio := ws.guestIO.(*directIO)
 				err = fmt.Errorf("perl exit %d\nstderr: %s", ep.code, dio.StderrB.String())
 			} else {
 				panic(r)
@@ -72,7 +72,7 @@ func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 	mod.Xzeroperl_eval(scriptPtr, 1, int32(len(args)), argvPtr)
 	// If we get here, Perl returned without calling proc_exit.
 	// Capture stdout anyway.
-	if dio, ok := ws.guestIO.(*DirectIO); ok {
+	if dio, ok := ws.guestIO.(*directIO); ok {
 		stdout = append([]byte(nil), dio.StdoutB.Bytes()...)
 	}
 	return stdout, nil

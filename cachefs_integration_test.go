@@ -21,7 +21,7 @@ func TestCachedFSIntegration(t *testing.T) {
 		t.Fatalf("fs.Sub failed: %v", err)
 	}
 
-	rawFile, err := subFS.Open("lib/" + Perl5Lib + "/Carp.pm")
+	rawFile, err := subFS.Open("lib/" + perl5Lib + "/Carp.pm")
 	if err != nil {
 		t.Skipf("Carp.pm not found: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestCachedFSIntegration(t *testing.T) {
 	defer cfs.Close()
 
 	// First read - should decompress and cache
-	f1, err := cfs.Open("lib/" + Perl5Lib + "/Carp.pm")
+	f1, err := cfs.Open("lib/" + perl5Lib + "/Carp.pm")
 	if err != nil {
 		t.Fatalf("First Open failed: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestCachedFSIntegration(t *testing.T) {
 	}
 
 	// Second read - should be a cache hit
-	f2, err := cfs.Open("lib/" + Perl5Lib + "/Carp.pm")
+	f2, err := cfs.Open("lib/" + perl5Lib + "/Carp.pm")
 	if err != nil {
 		t.Fatalf("Second Open failed: %v", err)
 	}

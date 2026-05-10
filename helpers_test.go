@@ -196,7 +196,7 @@ func TestDevNullFS(t *testing.T) {
 func TestDirectIOBasics(t *testing.T) {
 	t.Parallel()
 
-	d := NewDirectIO(strings.NewReader("abc"))
+	d := newDirectIO(strings.NewReader("abc"))
 
 	buf := make([]byte, 3)
 	n, err := d.ReadStdin(buf)
