@@ -26,7 +26,7 @@ func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []
 	default:
 	}
 
-	guestIO := NewDirectIO(stdin)
+	guestIO := newDirectIO(stdin)
 	mod, ws, err := newModule(guestIO, defaultRootFS(), nil, []string{os.TempDir()})
 	if err != nil {
 		return nil, err
@@ -39,7 +39,7 @@ func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []
 		return out, err
 	}
 
-	if dio, ok := ws.guestIO.(*DirectIO); ok && dio.StderrB.Len() > 0 {
+	if dio, ok := ws.guestIO.(*directIO); ok && dio.StderrB.Len() > 0 {
 		return out, errors.New("exiftool: " + dio.StderrB.String())
 	}
 	return out, nil

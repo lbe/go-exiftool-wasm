@@ -2,7 +2,6 @@ package exiftool
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"testing"
 )
@@ -12,24 +11,12 @@ import (
 // ---------------------------------------------------------------------------
 
 // BenchmarkCommand_Version measures the full cold-start cost of a single-shot
-// Command invocation: runtime creation, WASM compilation, Perl init, execution,
+// Command invocation: wasm2go native module setup, Perl init, execution,
 // and teardown.
 func BenchmarkCommand_Version(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := Command(nil, "-ver"); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-// BenchmarkRun_Version measures cold-start via Run with an explicit fs.FS.
-func BenchmarkRun_Version(b *testing.B) {
-	ctx := context.Background()
-	workFS := os.DirFS("testdata")
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := Run(ctx, workFS, "-ver"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -162,42 +149,6 @@ func BenchmarkCommand_JSON(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := Command(nil, "-json", "testdata/sample.jpg"); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-// BenchmarkRun_ReadTags reads specific tags via Run with workFS.
-func BenchmarkRun_ReadTags(b *testing.B) {
-	ctx := context.Background()
-	workFS := os.DirFS("testdata")
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := Run(ctx, workFS, "-Artist", "-Copyright", "/work/test.jpg"); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-// BenchmarkRun_AllTags dumps all tags via Run with workFS.
-func BenchmarkRun_AllTags(b *testing.B) {
-	ctx := context.Background()
-	workFS := os.DirFS("testdata")
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := Run(ctx, workFS, "/work/test.jpg"); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-// BenchmarkRun_JSON dumps all tags as JSON via Run with workFS.
-func BenchmarkRun_JSON(b *testing.B) {
-	ctx := context.Background()
-	workFS := os.DirFS("testdata")
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := Run(ctx, workFS, "-json", "/work/test.jpg"); err != nil {
 			b.Fatal(err)
 		}
 	}

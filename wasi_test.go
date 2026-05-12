@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,7 +14,7 @@ import (
 // directives. args are passed as @ARGV to the script. os.TempDir() is mounted
 // read-write so the script can perform file I/O there.
 func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
-	guestIO := NewDirectIO(nil)
+	guestIO := newDirectIO(nil)
 	mod, ws, err := newModule(guestIO, defaultRootFS(), nil, []string{os.TempDir()})
 	if err != nil {
 		return nil, err
@@ -23,12 +24,12 @@ func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 		if r := recover(); r != nil {
 			if ep, ok := r.(exitPanic); ok {
 				if ep.code == 0 {
-					if dio, ok := ws.guestIO.(*DirectIO); ok {
+					if dio, ok := ws.guestIO.(*directIO); ok {
 						stdout = append([]byte(nil), dio.StdoutB.Bytes()...)
 					}
 					return
 				}
-				dio := ws.guestIO.(*DirectIO)
+				dio := ws.guestIO.(*directIO)
 				err = fmt.Errorf("perl exit %d\nstderr: %s", ep.code, dio.StderrB.String())
 			} else {
 				panic(r)
@@ -72,7 +73,7 @@ func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 	mod.Xzeroperl_eval(scriptPtr, 1, int32(len(args)), argvPtr)
 	// If we get here, Perl returned without calling proc_exit.
 	// Capture stdout anyway.
-	if dio, ok := ws.guestIO.(*DirectIO); ok {
+	if dio, ok := ws.guestIO.(*directIO); ok {
 		stdout = append([]byte(nil), dio.StdoutB.Bytes()...)
 	}
 	return stdout, nil
@@ -241,5 +242,102 @@ unlink($file);
 		if lines[i] != exp {
 			t.Errorf("line %d: got %q, want %q", i, lines[i], exp)
 		}
+	}
+}
+
+// TestCommandAbsolutePathOutsideCwd verifies that Command succeeds when the
+// file argument is an absolute host path that is NOT under os.Getwd().
+//
+// On macOS, t.TempDir() returns a path under /var/folders/… (or its
+// /private/var symlink target), which is never a child of the repository
+// working directory.  This is the canonical failure case for the
+// filepath.Join(hostRoot, tail) bug in Xpath_open / Xpath_filestat_get.
+func TestCommandAbsolutePathOutsideCwd(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "sample.jpg")
+
+	src, err := os.ReadFile("testdata/sample.jpg")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(dst, src, 0o644); err != nil {
+		t.Fatalf("write fixture copy: %v", err)
+	}
+
+	// Guard: dst must not be under cwd (resolve symlinks to be sure).
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwdReal, _ := filepath.EvalSymlinks(cwd)
+	dstReal, _ := filepath.EvalSymlinks(dst)
+	if strings.HasPrefix(dstReal, cwdReal+string(filepath.Separator)) {
+		t.Skipf("t.TempDir() %q is under cwd %q; not-under-cwd case cannot be verified", dst, cwd)
+	}
+
+	out, err := Command(nil, "-Artist", "-Copyright", dst)
+	if err != nil {
+		t.Fatalf("Command with absolute path outside cwd: %v", err)
+	}
+
+	m := make(map[string][]byte)
+	if err := Unmarshal(out, m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got, want := string(m["Artist"]), "Test Artist"; got != want {
+		t.Errorf("Artist: got %q, want %q", got, want)
+	}
+	if got, want := string(m["Copyright"]), "Test Copyright 2024"; got != want {
+		t.Errorf("Copyright: got %q, want %q", got, want)
+	}
+}
+
+// TestCommandAbsolutePathUnderCwd verifies that an absolute host path that IS
+// under os.Getwd() continues to work after the fix (regression guard).
+func TestCommandAbsolutePathUnderCwd(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(cwd, "testdata", "sample.jpg")
+
+	out, err := Command(nil, "-Artist", "-Copyright", dst)
+	if err != nil {
+		t.Fatalf("Command with absolute path under cwd: %v", err)
+	}
+
+	m := make(map[string][]byte)
+	if err := Unmarshal(out, m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got, want := string(m["Artist"]), "Test Artist"; got != want {
+		t.Errorf("Artist: got %q, want %q", got, want)
+	}
+	if got, want := string(m["Copyright"]), "Test Copyright 2024"; got != want {
+		t.Errorf("Copyright: got %q, want %q", got, want)
+	}
+}
+
+// TestCommandAbsolutePathMultipleFiles verifies that Command handles multiple
+// file arguments that mix absolute paths outside and inside cwd.
+func TestCommandAbsolutePathMultipleFiles(t *testing.T) {
+	// File outside cwd.
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "sample.jpg")
+	src, err := os.ReadFile("testdata/sample.jpg")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(outside, src, 0o644); err != nil {
+		t.Fatalf("write fixture copy: %v", err)
+	}
+
+	// File under cwd.
+	cwd, _ := os.Getwd()
+	under := filepath.Join(cwd, "testdata", "sample.jpg")
+
+	_, err = Command(nil, "-Artist", outside, under)
+	if err != nil {
+		t.Fatalf("Command with mixed absolute paths: %v", err)
 	}
 }

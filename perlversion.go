@@ -2,13 +2,13 @@
 
 package exiftool
 
-// Perl5Lib is the Perl version string used to construct PERL5LIB environment
+// perl5Lib is the Perl library directory segment used to construct PERL5LIB
 // paths and locate the embedded standard library under
-// embed/perl-wasi-prefix/lib/<Perl5Lib>/.
+// embed/perl-wasi-prefix/lib/<perl5Lib>/.
 //
 // When switching to a different Perl build:
 //  1. Update this constant.
 //  2. Replace the embed/perl-wasi-prefix/ tree.
-//  3. Regenerate zeroperl/zeroperl.go via wasm2go.
+//  3. Regenerate internal/zeroperl/zeroperl.go via wasm2go.
 //  4. Run go generate ./... to recompress.
-const Perl5Lib = "5.16.3"
+const perl5Lib = "5.16.3"

@@ -1,7 +1,6 @@
 package exiftool
 
 import (
-	"context"
 	"embed"
 	"encoding/binary"
 	"errors"
@@ -13,7 +12,7 @@ import (
 	"time"
 
 	"github.com/lbe/cfsread"
-	wasm2go "github.com/lbe/go-exiftool-wasm/zeroperl"
+	wasm2go "github.com/lbe/go-exiftool-wasm/internal/zeroperl"
 )
 
 // perlFSRoot holds the LZ4-compressed Perl standard library and wasm32-wasi
@@ -160,9 +159,16 @@ func commandArgs(arg []string) []string {
 // the provided I/O adapter, filesystem mounts, and optional writable host
 // directories. It calls X_initialize on the module to set up memory and stack
 // but does not evaluate any Perl script.
-func newModule(guestIO GuestIO, rootFS fs.FS, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
+func newModule(gio guestIO, rootFS fs.FS, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
+	// Mount "/" writable so the guest can write files in the process working
+	// directory. WASI is used here as an FFI transport, not a security boundary;
+	// CWD write access matches what a subprocess or CGo call would have.
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, nil, fmt.Errorf("exiftool: getwd: %w", err)
+	}
 	mounts := []mountEntry{
-		{guestPath: "/", root: rootFS, writable: false},
+		{guestPath: "/", root: rootFS, writable: true, hostRoot: cwd},
 		{guestPath: "/dev", root: devNullFS{}, writable: false},
 	}
 	if workFS != nil {
@@ -174,7 +180,7 @@ func newModule(guestIO GuestIO, rootFS fs.FS, workFS fs.FS, writableDirs []strin
 
 	ws := &wasiState{}
 	mod := wasm2go.New(ws, ws)
-	initWASIState(ws, mod, guestIO, mounts)
+	initWASIState(ws, mod, gio, mounts)
 	ws.trace = os.Getenv("EXIFTOOL_WASI_TRACE") == "1"
 
 	mod.X_initialize()
@@ -220,7 +226,7 @@ func initModule(mod *wasm2go.Module, sio *serverIO) error {
 // mode the eval runs in a background goroutine.
 //
 // Note: this function calls Xzeroperl_init internally, which is fine for the
-// single-shot Command/Run path. The Server path in server.go calls initModule
+// single-shot Command path. The Server path in server.go calls initModule
 // separately and then invokes Xzeroperl_eval directly (bypassing this
 // function) to keep the interpreter alive across multiple commands.
 func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []byte, err error) {
@@ -228,14 +234,14 @@ func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []by
 		if r := recover(); r != nil {
 			if ep, ok := r.(exitPanic); ok {
 				if ep.code == 0 {
-					if dio, ok := ws.guestIO.(*DirectIO); ok {
+					if dio, ok := ws.guestIO.(*directIO); ok {
 						result = append([]byte(nil), dio.StdoutB.Bytes()...)
 					}
 					return
 				}
 				if ep.code != 0 {
 					stderrStr := ""
-					if dio, ok := ws.guestIO.(*DirectIO); ok {
+					if dio, ok := ws.guestIO.(*directIO); ok {
 						stderrStr = dio.StderrB.String()
 					}
 					err = fmt.Errorf("exiftool exited with code %d\nstderr: %s", ep.code, stderrStr)
@@ -281,47 +287,8 @@ func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []by
 
 	mod.Xzeroperl_eval(scriptPtr, 0, int32(len(args)), argvPtr)
 
-	if dio, ok := ws.guestIO.(*DirectIO); ok {
+	if dio, ok := ws.guestIO.(*directIO); ok {
 		return append([]byte(nil), dio.StdoutB.Bytes()...), nil
 	}
 	return nil, nil
-}
-
-// Run executes a single ExifTool invocation with the embedded Perl stdlib as
-// the only visible filesystem. workFS is mounted read-only at /work inside the
-// sandbox, so pass guest paths such as "/work/photo.jpg" in args. Any stderr
-// output from ExifTool is returned as an error.
-func Run(ctx context.Context, workFS fs.FS, args ...string) (out []byte, err error) {
-	guestIO := NewDirectIO(nil)
-	mod, ws, err := newModule(guestIO, perlFS(), workFS, nil)
-	if err != nil {
-		return nil, err
-	}
-	// mod is stored inside ws; the eval functions access it through ws methods.
-	_ = mod
-	out, err = evalModule(mod, ws, args...)
-	if err != nil {
-		return out, err
-	}
-	if dio, ok := ws.guestIO.(*DirectIO); ok && dio.StderrB.Len() > 0 {
-		return out, fmt.Errorf("exiftool stderr: %s", dio.StderrB.String())
-	}
-	return out, nil
-}
-
-// RunDebug is like [Run] but prints ExifTool's stderr to the host's stderr
-// instead of returning it as an error. Useful for interactive debugging.
-func RunDebug(ctx context.Context, workFS fs.FS, args ...string) (out []byte, err error) {
-	guestIO := NewDirectIO(nil)
-	mod, ws, err := newModule(guestIO, perlFS(), workFS, nil)
-	if err != nil {
-		return nil, err
-	}
-	// mod is stored inside ws; the eval functions access it through ws methods.
-	_ = mod
-	out, err = evalModule(mod, ws, args...)
-	if dio, ok := ws.guestIO.(*DirectIO); ok && dio.StderrB.Len() > 0 {
-		fmt.Fprintf(os.Stderr, "STDERR: %s\n", dio.StderrB.String())
-	}
-	return out, err
 }

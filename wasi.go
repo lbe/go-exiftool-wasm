@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	wasm2go "github.com/lbe/go-exiftool-wasm/zeroperl"
+	wasm2go "github.com/lbe/go-exiftool-wasm/internal/zeroperl"
 )
 
 // WASI error codes returned to the guest. Values follow the WASI snapshot-preview1
@@ -100,7 +100,7 @@ type mountEntry struct {
 
 // wasiState implements the WASI snapshot-preview1 host functions expected by
 // the zeroperl wasm2go module. It owns the file-descriptor table, mount list,
-// and the [GuestIO] adapter for stdin/stdout/stderr. It also satisfies the
+// and the guest I/O adapter for stdin/stdout/stderr. It also satisfies the
 // Xenv interface (Xcall_host_function) required by the generated module.
 //
 // All WASI X_ methods operate on the module's linear memory directly via
@@ -112,7 +112,7 @@ type mountEntry struct {
 //     interpreter lifetime.
 //   - Only that goroutine may access or mutate mutable fd state (fds,
 //     preopen-backed fd entries, and per-fd offsets).
-//   - Other goroutines may communicate with the interpreter only via GuestIO
+//   - Other goroutines may communicate with the interpreter only via guestIO
 //     pipes/readers, never by touching wasiState internals directly.
 //
 // Set EXIFTOOL_WASI_ASSERT_OWNER=1 to enable runtime ownership assertions.
@@ -120,7 +120,7 @@ type wasiState struct {
 	module   *wasm2go.Module
 	fds      []fdEntry
 	mounts   []mountEntry
-	guestIO  GuestIO
+	guestIO  guestIO
 	preopens []fdEntry
 	trace    bool
 	env      []string // cached PERL5LIB environment entries
@@ -132,10 +132,10 @@ type wasiState struct {
 
 // initWASIState populates ws with file-descriptor table entries and preopen
 // mappings for the given module, I/O adapter, and mount list.
-func initWASIState(ws *wasiState, mod *wasm2go.Module, guestIO GuestIO, mounts []mountEntry) {
+func initWASIState(ws *wasiState, mod *wasm2go.Module, gio guestIO, mounts []mountEntry) {
 	ws.module = mod
 	ws.mounts = mounts
-	ws.guestIO = guestIO
+	ws.guestIO = gio
 	ws.fds = make([]fdEntry, 3+len(mounts), 8+len(mounts))
 	ws.fds[0] = fdEntry{fdType: fdCharDev, path: "stdin"}
 	ws.fds[1] = fdEntry{fdType: fdCharDev, path: "stdout"}
@@ -144,7 +144,7 @@ func initWASIState(ws *wasiState, mod *wasm2go.Module, guestIO GuestIO, mounts [
 		ws.preopens = append(ws.preopens, fdEntry{path: m.guestPath, fdType: fdDir, mount: i, preopen: true})
 		ws.fds[3+i] = fdEntry{path: m.guestPath, fdType: fdDir, mount: i, preopen: true}
 	}
-	ws.env = []string{"PERL5LIB=/lib/" + Perl5Lib + ":/lib/" + Perl5Lib + "/wasm32-wasi"}
+	ws.env = []string{"PERL5LIB=/lib/" + perl5Lib + ":/lib/" + perl5Lib + "/wasm32-wasi"}
 	ws.assertOwner = os.Getenv("EXIFTOOL_WASI_ASSERT_OWNER") == "1"
 }
 
@@ -224,6 +224,8 @@ func (w *wasiState) resolvePath(guestPath string) (*mountEntry, string) {
 		clean = "/"
 	}
 
+	w.logTrace("resolvePath guestPath=%q clean=%q", guestPath, clean)
+
 	var best *mountEntry
 	bestLen := -1
 	bestRel := ""
@@ -234,7 +236,15 @@ func (w *wasiState) resolvePath(guestPath string) (*mountEntry, string) {
 			mp = "/"
 		}
 
-		match := clean == mp || strings.HasPrefix(clean, mp+"/")
+		match := false
+		if clean == mp {
+			match = true
+		} else if mp == "/" {
+			match = true
+		} else if strings.HasPrefix(clean, mp+"/") {
+			match = true
+		}
+
 		if !match {
 			continue
 		}
@@ -247,13 +257,23 @@ func (w *wasiState) resolvePath(guestPath string) (*mountEntry, string) {
 			bestRel = rel
 		}
 	}
+	w.logTrace("resolvePath guestPath=%q best=%p bestRel=%q", guestPath, best, bestRel)
 	return best, bestRel
 }
 
+// resolveDirfdPath resolves a WASI (dirfd, path) pair to a mountEntry and a
+// mount-relative path string. Absolute guest paths bypass dirfd entirely.
+// For preopen fds the relative path is returned as-is for mount lookup.
+// For non-preopen directory fds, the relative path is joined against the
+// absolute guest path stored in fdEntry.path — this enables correct nested
+// path_open resolution during ExifTool -r directory recursion.
 func (w *wasiState) resolveDirfdPath(dirfd int32, pathPtr int32, pathLen int32) (*mountEntry, string) {
 	w.assertSingleOwner()
 	pathBytes := w.readBytes(pathPtr, pathLen)
 	guestPath := string(pathBytes)
+
+	w.logTrace("resolveDirfdPath dirfd=%d path=%q", dirfd, guestPath)
+
 	if strings.HasPrefix(guestPath, "/") {
 		return w.resolvePath(guestPath)
 	}
@@ -262,6 +282,13 @@ func (w *wasiState) resolveDirfdPath(dirfd int32, pathPtr int32, pathLen int32) 
 		entry := w.fds[dirfd]
 		if entry.preopen && entry.mount >= 0 && entry.mount < len(w.mounts) {
 			return &w.mounts[entry.mount], path.Clean(guestPath)
+		}
+		// Non-preopen directory fd: resolution must be relative to the absolute
+		// guest path stored in entry.path.
+		if entry.fdType == fdDir && entry.path != "" {
+			full := path.Join(entry.path, guestPath)
+			w.logTrace("resolveDirfdPath resolving rel %q against %q -> %q", guestPath, entry.path, full)
+			return w.resolvePath(full)
 		}
 	}
 	return nil, ""
@@ -435,11 +462,36 @@ func (w *wasiState) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr 
 	return int32(wasiESuccess)
 }
 
-func mountHostPath(m *mountEntry, rel string) (string, bool) {
+// isRootMount reports whether m covers the guest root directory.
+func isRootMount(m *mountEntry) bool {
+	return path.Clean("/"+m.guestPath) == "/"
+}
+
+// mountHostPaths returns the (primary, fallback) host filesystem paths for rel
+// within mount m. Returns ("", "") when m is not writable or has no hostRoot.
+//
+// The WASI libc strips the leading "/" from absolute guest paths when mapping
+// them to the best matching preopen fd. For the root mount this means that an
+// original absolute host path /Users/you/… arrives as rel="Users/you/…".
+// Re-prepending "/" (primary) recovers the original absolute path. If that
+// does not exist, callers fall back to filepath.Join(hostRoot, rel) which
+// handles cwd-relative paths (guest CWD is "/", so relative inputs also reach
+// the "/" preopen as bare names like "testdata/sample.jpg").
+//
+// For non-root mounts (e.g. os.TempDir()) filepath.Join(hostRoot, rel) is
+// always correct; only primary is returned.
+func mountHostPaths(m *mountEntry, rel string) (primary, fallback string) {
 	if m == nil || !m.writable || m.hostRoot == "" {
-		return "", false
+		return "", ""
 	}
-	return filepath.Join(m.hostRoot, filepath.FromSlash(rel)), true
+	joined := filepath.Join(m.hostRoot, filepath.FromSlash(rel))
+	if isRootMount(m) {
+		abs := "/" + filepath.FromSlash(rel)
+		if abs != joined {
+			return abs, joined
+		}
+	}
+	return joined, ""
 }
 
 func (w *wasiState) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr int32) int32 {
@@ -455,10 +507,8 @@ func (w *wasiState) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwritten
 			var n int
 			if fd == 1 {
 				n, _ = w.guestIO.WriteStdout(data)
-				w.logTrace("fd_write fd=stdout data=%q", string(data))
 			} else {
 				n, _ = w.guestIO.WriteStderr(data)
-				w.logTrace("fd_write fd=stderr data=%q", string(data))
 			}
 			total += uint32(n)
 		}
@@ -629,17 +679,19 @@ func (w *wasiState) Xfd_readdir(fd int32, bufPtr int32, bufLen int32, cookie int
 	if fd < 0 || int(fd) >= len(w.fds) {
 		return int32(wasiEBadf)
 	}
-	entry := w.fds[fd]
+	entry := &w.fds[fd]
 	if entry.preopen {
 		if entry.mount < 0 || entry.mount >= len(w.mounts) {
 			return int32(wasiEBadf)
 		}
-		if d, ok := w.mounts[entry.mount].root.(fs.ReadDirFS); ok {
-			entries, err := d.ReadDir(".")
-			if err != nil {
-				return int32(wasiEIo)
+		if entry.file == nil {
+			if d, ok := w.mounts[entry.mount].root.(fs.ReadDirFS); ok {
+				entries, err := d.ReadDir(".")
+				if err != nil {
+					return int32(wasiEIo)
+				}
+				entry.file = &dirEntriesFile{entries: entries}
 			}
-			entry.file = &dirEntriesFile{entries: entries}
 		}
 	}
 	if entry.file == nil {
@@ -653,50 +705,39 @@ func (w *wasiState) Xfd_readdir(fd int32, bufPtr int32, bufLen int32, cookie int
 		entry.dirFile = df
 	}
 	mem := w.mem()
-	if cookie != entry.dirOff {
-		entry.dirOff = 0
-		for entry.dirOff < cookie {
-			_, err := entry.dirFile.ReadDir(1)
-			if err != nil {
-				binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
-				return int32(wasiESuccess)
-			}
-			entry.dirOff++
-		}
+	entries, err := entry.dirFile.ReadDir(-1)
+	if err != nil && err != io.EOF {
+		return int32(wasiEIo)
 	}
-	entries, err := entry.dirFile.ReadDir(1)
-	if err != nil || len(entries) == 0 {
+	if len(entries) == 0 {
 		binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
-		w.fds[fd] = entry
 		return int32(wasiESuccess)
 	}
-	name := entries[0].Name()
-	dNameLen := uint32(len(name))
-	dEntryLen := uint32(24 + dNameLen)
-	if dEntryLen > uint32(bufLen) {
-		dEntryLen = uint32(bufLen)
-		if dEntryLen < 24 {
-			binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
-			w.fds[fd] = entry
-			return int32(wasiESuccess)
+
+	var dUsed uint32
+	for i := int(cookie); i < len(entries); i++ {
+		name := entries[i].Name()
+		dNameLen := uint32(len(name))
+		dEntryLen := uint32(24 + dNameLen)
+		if dUsed+dEntryLen > uint32(bufLen) {
+			break
 		}
+
+		off := bufPtr + int32(dUsed)
+		binary.LittleEndian.PutUint64(mem[off:], uint64(i+1))
+		binary.LittleEndian.PutUint64(mem[off+8:], 0)
+		binary.LittleEndian.PutUint32(mem[off+16:], dNameLen)
+		var ftype byte
+		if entries[i].IsDir() {
+			ftype = fdDir
+		} else {
+			ftype = fdFile
+		}
+		binary.LittleEndian.PutUint32(mem[off+20:], uint32(ftype))
+		copy(mem[off+24:], name)
+		dUsed += dEntryLen
 	}
-	entry.dirOff++
-	binary.LittleEndian.PutUint64(mem[bufPtr:], uint64(entry.dirOff))
-	binary.LittleEndian.PutUint64(mem[bufPtr+8:], 0)
-	binary.LittleEndian.PutUint32(mem[bufPtr+16:], dNameLen)
-	var ftype byte
-	if entries[0].IsDir() {
-		ftype = fdDir
-	} else {
-		ftype = fdFile
-	}
-	binary.LittleEndian.PutUint32(mem[bufPtr+20:], uint32(ftype))
-	if dEntryLen > 24 {
-		copy(mem[bufPtr+24:], name[:dEntryLen-24])
-	}
-	w.fds[fd] = entry
-	binary.LittleEndian.PutUint32(mem[bufUsedPtr:], dEntryLen)
+	binary.LittleEndian.PutUint32(mem[bufUsedPtr:], dUsed)
 	return int32(wasiESuccess)
 }
 
@@ -720,9 +761,30 @@ func (w *wasiState) Xpath_filestat_get(dirfd int32, flags int32, pathPtr int32, 
 	if mount == nil {
 		return int32(wasiENoEnt)
 	}
-	fi, err := fs.Stat(mount.root, relPath)
-	if err != nil {
-		return int32(wasiENoEnt)
+	var fi fs.FileInfo
+	if mount.writable && mount.hostRoot != "" {
+		primary, cwdFallback := mountHostPaths(mount, relPath)
+		var osErr error
+		fi, osErr = os.Stat(primary)
+		if osErr != nil && cwdFallback != "" {
+			// primary is the re-absolutized path; try cwd-joined fallback for
+			// relative-origin paths that the WASI libc resolved to the "/" preopen.
+			fi, osErr = os.Stat(cwdFallback)
+		}
+		if osErr != nil {
+			// Fall back to overlay FS for embedded files (Perl stdlib, /dev, etc.).
+			var fsErr error
+			fi, fsErr = fs.Stat(mount.root, relPath)
+			if fsErr != nil {
+				return int32(wasiENoEnt)
+			}
+		}
+	} else {
+		var fsErr error
+		fi, fsErr = fs.Stat(mount.root, relPath)
+		if fsErr != nil {
+			return int32(wasiENoEnt)
+		}
 	}
 	fdType := fdFile
 	if fi.IsDir() {
@@ -754,10 +816,11 @@ func (w *wasiState) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pa
 	var f fs.File
 	var err error
 	if mount.writable {
-		hostPath := relPath
-		if mount.hostRoot != "" {
-			hostPath = filepath.Join(mount.hostRoot, filepath.FromSlash(relPath))
+		primary, cwdFallback := mountHostPaths(mount, relPath)
+		if primary == "" {
+			primary = relPath
 		}
+		hostPath := primary
 		osFlags := os.O_RDONLY
 		if (uint64(fdRightsBase)&rightFDWrite) != 0 || (uint32(oflags)&(oflagCreat|oflagTrunc|oflagExcl)) != 0 {
 			osFlags = os.O_RDWR
@@ -776,12 +839,58 @@ func (w *wasiState) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pa
 		}
 
 		hostFile, osErr := os.OpenFile(hostPath, osFlags, 0o666)
+		if osErr != nil && cwdFallback != "" {
+			// primary is the re-absolutized path; try cwd-joined fallback for
+			// relative-origin paths (e.g. "testdata/sample.jpg" from guest CWD "/").
+			hostFile, osErr = os.OpenFile(cwdFallback, osFlags, 0o666)
+		}
 		if osErr != nil {
+			// For opens that do not create or truncate, fall back to the overlay FS
+			// so embedded Perl files are still served even when the root mount is
+			// writable. The guest may request write rights in fdRightsBase even for
+			// existing-file reads, so we check oflags (not osFlags) to determine intent.
+			if uint32(oflags)&(oflagCreat|oflagTrunc|oflagExcl) == 0 {
+				// IMPORTANT: f and err are declared with var in the outer scope
+				// of Xpath_open. Use plain assignment (=), NOT short declaration (:=).
+				f, err = mount.root.Open(relPath)
+				if err != nil {
+					return int32(wasiENoEnt)
+				}
+				fi, _ := f.Stat()
+				fdType := fdFile
+				if fi != nil && fi.IsDir() {
+					fdType = fdDir
+				}
+				fd := w.allocFD()
+				// Use absGuestPath for directory entries so resolveDirfdPath can
+				// resolve relative paths against this fd in subsequent calls.
+				// Phase 1 established this invariant for all directory fdEntry values.
+				entryPath := guestPath
+				if fdType == fdDir {
+					entryPath = path.Clean("/" + mount.guestPath + "/" + relPath)
+				}
+				entry := fdEntry{file: &fsFileWrap{File: f}, path: entryPath, fdType: fdType}
+				if fdType == fdDir {
+					if df, ok := f.(fs.ReadDirFile); ok {
+						entry.dirFile = df
+					}
+				}
+				w.fds[fd] = entry
+				binary.LittleEndian.PutUint32(mem[fdPtr:], uint32(fd))
+				return int32(wasiESuccess)
+			}
 			return int32(wasiENoEnt)
 		}
 		fi, _ := hostFile.Stat()
 		fd := w.allocFD()
-		w.fds[fd] = fdEntry{file: &osFile{File: hostFile}, path: guestPath, fdType: fdFile}
+		// Store the resolved absolute guest path for directory fds so that
+		// resolveDirfdPath can resolve relative paths against this fd in
+		// subsequent path_open calls (required for ExifTool -r recursion).
+		entryPath := guestPath
+		if fi != nil && fi.IsDir() {
+			entryPath = path.Clean("/" + mount.guestPath + "/" + relPath)
+		}
+		w.fds[fd] = fdEntry{file: &osFile{File: hostFile}, path: entryPath, fdType: fdFile}
 		if fi != nil && fi.IsDir() {
 			w.fds[fd].fdType = fdDir
 		}
@@ -799,7 +908,18 @@ func (w *wasiState) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pa
 		fdType = fdDir
 	}
 	fd := w.allocFD()
-	entry := fdEntry{file: &fsFileWrap{File: f}, path: guestPath, fdType: fdType}
+	savedPath := guestPath
+	if !strings.HasPrefix(savedPath, "/") {
+		// If opened relative to a dirfd, we need to reconstruct the absolute
+		// guest path so that subsequent readdir-relative opens work.
+		if dirfd >= 0 && int(dirfd) < len(w.fds) {
+			parent := w.fds[dirfd]
+			if parent.path != "" {
+				savedPath = path.Join(parent.path, guestPath)
+			}
+		}
+	}
+	entry := fdEntry{file: &fsFileWrap{File: f}, path: savedPath, fdType: fdType}
 	if fdType == fdDir {
 		if df, ok := f.(fs.ReadDirFile); ok {
 			entry.dirFile = df
@@ -836,12 +956,20 @@ func (w *wasiState) Xpath_rename(oldDirfd int32, oldPathPtr int32, oldPathLen in
 	if oldMount == nil || newMount == nil {
 		return int32(wasiENoEnt)
 	}
-	oldHost, okOld := mountHostPath(oldMount, oldRel)
-	newHost, okNew := mountHostPath(newMount, newRel)
-	if !okOld || !okNew {
+	oldPrimary, oldFallback := mountHostPaths(oldMount, oldRel)
+	newPrimary, newFallback := mountHostPaths(newMount, newRel)
+	if oldPrimary == "" || newPrimary == "" {
 		return int32(wasiEROFS)
 	}
-	if err := os.Rename(oldHost, newHost); err != nil {
+	// For root mounts, oldPrimary is the re-absolutized path. If the source file
+	// is not found there (relative-origin path from guest CWD "/"), fall back to
+	// the cwd-joined paths so relative-path ExifTool writes continue to work.
+	if oldFallback != "" {
+		if _, err := os.Stat(oldPrimary); err != nil {
+			oldPrimary, newPrimary = oldFallback, newFallback
+		}
+	}
+	if err := os.Rename(oldPrimary, newPrimary); err != nil {
 		return int32(wasiEIo)
 	}
 	return int32(wasiESuccess)

@@ -9,8 +9,6 @@
 //   - [Command] / [CommandContext]: one-shot invocation; host paths are visible
 //     read-only under "/" inside the sandbox, with [os.TempDir] mounted read-write
 //     for ExifTool side effects.
-//   - [Run] / [RunDebug]: single invocation with an explicit [fs.FS] mounted at
-//     "/work"; pass paths such as "/work/photo.jpg".
 //   - [NewServer]: persistent ExifTool using the -stay_open protocol; amortises
 //     Perl startup across many [Server.Command] calls. Call [Server.Shutdown] or
 //     [Server.Close] when finished.
@@ -21,7 +19,7 @@
 // empty unless you intend to pass a valid ExifTool option: it is prepended
 // verbatim and a mistaken value can be interpreted as a file argument.
 //
-// The Perl version is controlled by the [Perl5Lib] constant in perlversion.go.
+// The Perl library layout segment is defined in perlversion.go (perl5Lib).
 package exiftool
 
 // Exec is retained for compatibility with the original go-exiftool API.
