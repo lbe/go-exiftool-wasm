@@ -34,6 +34,7 @@ type State struct {
 	preopens  []fdEntry
 	mounts    []mountEntry
 	env       []string
+	args      []string
 	startTime time.Time
 }
 
@@ -164,6 +165,22 @@ func (s *State) Xrandom_get(bufPtr, bufLen int32) int32 {
 	rand.Read(mem[bufPtr : bufPtr+bufLen])
 	return wasiESuccess
 }
+
+// Xclock_time_get: stub returns wasiENoSys for all clock IDs — test expects ESUCCESS for 0,1
+func (s *State) Xclock_time_get(clockID int32, precision int64, resultPtr int32) int32 {
+	return wasiENoSys // stub: wrong — test for clockID 0,1 expects ESUCCESS
+}
+
+// Xclock_res_get: stub returns wasiENoSys for all — test expects ESUCCESS for 0,1
+func (s *State) Xclock_res_get(clockID int32, resultPtr int32) int32 {
+	return wasiENoSys // stub: wrong
+}
+
+// Xargs_sizes_get: stub writes nothing, returns 0 — test expects count=3, buf_size=16
+func (s *State) Xargs_sizes_get(argcPtr, argvSizePtr int32) int32 { return wasiESuccess }
+
+// Xargs_get: stub writes nothing — test expects pointer array and strings
+func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 { return wasiESuccess }
 func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 	clean := path.Clean("/" + guestPath)
 	if clean == "." {
