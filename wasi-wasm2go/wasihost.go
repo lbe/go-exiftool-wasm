@@ -27,6 +27,8 @@ const (
 	wasiENotDir   int32 = 54
 	wasiENotEmpty int32 = 55
 	wasiEROFS     int32 = 66
+
+	fdDir byte = 3
 )
 
 type State struct {
@@ -224,9 +226,14 @@ func mountHostPaths(m *mountEntry, rel string) (primary, fallback string) {
 	return filepath.Join(m.hostRoot, filepath.FromSlash(rel)), ""
 }
 
-func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
+func (s *State) resolvePrimary(dirfd, pathPtr, pathLen int32) string {
 	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	primary, _ := mountHostPaths(m, rel)
+	return primary
+}
+
+func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
+	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
 	if primary == "" {
 		return wasiEROFS
 	}
@@ -237,8 +244,7 @@ func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
 }
 
 func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
-	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
-	primary, _ := mountHostPaths(m, rel)
+	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
 	if primary == "" {
 		return wasiEROFS
 	}
@@ -256,8 +262,7 @@ func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
 }
 
 func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
-	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
-	primary, _ := mountHostPaths(m, rel)
+	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
 	if primary == "" {
 		return wasiEROFS
 	}
@@ -275,8 +280,7 @@ func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
 }
 
 func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr int32) int32 {
-	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
-	primary, _ := mountHostPaths(m, rel)
+	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
 	if primary == "" {
 		return wasiEROFS
 	}
@@ -293,8 +297,7 @@ func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr
 func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPathLen int32) int32 {
 	// oldPath is the symlink target (literal, not resolved via mount)
 	target := string(s.readBytes(oldPathPtr, oldPathLen))
-	m, rel := s.resolveDirfdPath(dirfd, newPathPtr, newPathLen)
-	primary, _ := mountHostPaths(m, rel)
+	primary := s.resolvePrimary(dirfd, newPathPtr, newPathLen)
 	if primary == "" {
 		return wasiEROFS
 	}
