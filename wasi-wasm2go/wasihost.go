@@ -14,13 +14,27 @@ import (
 	"time"
 )
 
+const (
+	wasiESuccess  int32 = 0
+	wasiEExist    int32 = 20
+	wasiEBadf     int32 = 8
+	wasiEInval    int32 = 28
+	wasiEIo       int32 = 29
+	wasiEIsdir    int32 = 31
+	wasiENoEnt    int32 = 44
+	wasiENoSys    int32 = 52
+	wasiENotDir   int32 = 54
+	wasiENotEmpty int32 = 55
+	wasiEROFS     int32 = 66
+)
+
 type State struct {
 	mem       func() []byte
 	fds       []fdEntry
 	preopens  []fdEntry
 	mounts    []mountEntry
 	env       []string
-	startTime time.Time // for Cycle 3 — declare here
+	startTime time.Time
 }
 
 // fsFile is the read/stat/close interface for fd table entries.
@@ -60,15 +74,15 @@ func New(mem func() []byte, opts ...Option) *State {
 	return s
 }
 
-func WithArgs(args ...string) Option                             { return func(*State) {} }
-func WithEnv(env ...string) Option                               { return func(*State) {} }
+func WithArgs(args ...string) Option                                  { return func(*State) {} }
+func WithEnv(env ...string) Option                                    { return func(*State) {} }
 func WithMount(guestPath string, root fs.FS) Option                   { return func(*State) {} }
 func WithWritableMount(guestPath, hostRoot string, root fs.FS) Option { return func(*State) {} }
-func WithStdin(r io.Reader) Option                               { return func(*State) {} }
-func WithStdout(w io.Writer) Option                              { return func(*State) {} }
-func WithStderr(w io.Writer) Option                              { return func(*State) {} }
-func WithTracing() Option                                        { return func(*State) {} }
-func WithOwnerAssertion() Option                                 { return func(*State) {} }
+func WithStdin(r io.Reader) Option                                    { return func(*State) {} }
+func WithStdout(w io.Writer) Option                                   { return func(*State) {} }
+func WithStderr(w io.Writer) Option                                   { return func(*State) {} }
+func WithTracing() Option                                             { return func(*State) {} }
+func WithOwnerAssertion() Option                                      { return func(*State) {} }
 
 func (s *State) getMem() []byte { return s.mem() }
 
@@ -80,7 +94,7 @@ func (s *State) Xenviron_sizes_get(countPtr, bufSizePtr int32) int32 {
 		total += uint32(len(e)) + 1
 	}
 	binary.LittleEndian.PutUint32(mem[bufSizePtr:], total)
-	return 0
+	return wasiESuccess
 }
 func (s *State) Xenviron_get(envPtr, envBufPtr int32) int32 {
 	mem := s.mem()
@@ -91,50 +105,56 @@ func (s *State) Xenviron_get(envPtr, envBufPtr int32) int32 {
 		mem[bufOff+uint32(n)] = 0
 		bufOff += uint32(n) + 1
 	}
-	return 0
+	return wasiESuccess
 }
 func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
 	idx := fd - 3
 	if idx < 0 || idx >= int32(len(s.preopens)) {
-		return 8 // EBADF
+		return wasiEBadf
 	}
 	mem := s.mem()
 	pathLen := uint32(len(s.preopens[idx].path))
 	binary.LittleEndian.PutUint32(mem[prestatPtr:], 0)
 	binary.LittleEndian.PutUint32(mem[prestatPtr+4:], pathLen)
-	return 0
+	return wasiESuccess
 }
 func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 	idx := fd - 3
 	if idx < 0 || idx >= int32(len(s.preopens)) {
-		return 8
+		return wasiEBadf
 	}
 	mem := s.mem()
 	name := s.preopens[idx].path
 	copy(mem[pathPtr:], name)
-	return 0
+	return wasiESuccess
 }
 func (s *State) Xfd_fdstat_get(fd, statPtr int32) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
-		return 8 // EBADF
+		return wasiEBadf
 	}
 	entry := s.fds[fd]
 	if entry.file == nil && entry.fdType == 0 {
-		return 8 // EBADF
+		return wasiEBadf
 	}
 	mem := s.mem()
-	var buf [24]byte
-	binary.LittleEndian.PutUint16(buf[0:], uint16(entry.fdType))
-	copy(mem[statPtr:], buf[:])
-	return 0
+	writeFdstat(mem, statPtr, entry.fdType)
+	return wasiESuccess
 }
+
+func writeFdstat(mem []byte, statPtr int32, fdType byte) {
+	var buf [24]byte
+	binary.LittleEndian.PutUint16(buf[0:], uint16(fdType))
+	// Other fields (fs_flags, fs_rights_base, fs_rights_inheriting) remain 0 for now.
+	copy(mem[statPtr:], buf[:])
+}
+
 func (s *State) Xfd_renumber(fd, to int32) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) || to < 0 || int(to) >= len(s.fds) {
-		return 8
+		return wasiEBadf
 	}
 	s.fds[to] = s.fds[fd]
 	s.fds[fd] = fdEntry{}
-	return 0
+	return wasiESuccess
 }
 func (s *State) Xproc_exit(code int32) {
 	panic(ExitError{Code: code})
@@ -142,7 +162,7 @@ func (s *State) Xproc_exit(code int32) {
 func (s *State) Xrandom_get(bufPtr, bufLen int32) int32 {
 	mem := s.mem()
 	rand.Read(mem[bufPtr : bufPtr+bufLen])
-	return 0
+	return wasiESuccess
 }
 func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 	clean := path.Clean("/" + guestPath)
