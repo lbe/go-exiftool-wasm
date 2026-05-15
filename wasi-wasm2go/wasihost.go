@@ -85,27 +85,13 @@ func WithStderr(w io.Writer) Option                                   { return f
 func WithTracing() Option                                             { return func(*State) {} }
 func WithOwnerAssertion() Option                                      { return func(*State) {} }
 
-func (s *State) getMem() []byte { return s.mem() }
 
 func (s *State) Xenviron_sizes_get(countPtr, bufSizePtr int32) int32 {
-	mem := s.mem()
-	binary.LittleEndian.PutUint32(mem[countPtr:], uint32(len(s.env)))
-	var total uint32
-	for _, e := range s.env {
-		total += uint32(len(e)) + 1
-	}
-	binary.LittleEndian.PutUint32(mem[bufSizePtr:], total)
+	writeStringTableSizes(s.mem(), countPtr, bufSizePtr, s.env)
 	return wasiESuccess
 }
 func (s *State) Xenviron_get(envPtr, envBufPtr int32) int32 {
-	mem := s.mem()
-	bufOff := uint32(envBufPtr)
-	for i, e := range s.env {
-		binary.LittleEndian.PutUint32(mem[envPtr+int32(i*4):], bufOff)
-		n := copy(mem[bufOff:], e)
-		mem[bufOff+uint32(n)] = 0
-		bufOff += uint32(n) + 1
-	}
+	writeStringTable(s.mem(), envPtr, envBufPtr, s.env)
 	return wasiESuccess
 }
 func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
@@ -197,26 +183,32 @@ func (s *State) Xclock_res_get(clockID int32, resultPtr int32) int32 {
 }
 
 func (s *State) Xargs_sizes_get(argcPtr, argvSizePtr int32) int32 {
-	mem := s.mem()
-	binary.LittleEndian.PutUint32(mem[argcPtr:], uint32(len(s.args)))
-	var total uint32
-	for _, a := range s.args {
-		total += uint32(len(a)) + 1
-	}
-	binary.LittleEndian.PutUint32(mem[argvSizePtr:], total)
+	writeStringTableSizes(s.mem(), argcPtr, argvSizePtr, s.args)
 	return wasiESuccess
 }
 
 func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 {
-	mem := s.mem()
-	bufOff := uint32(argvBufPtr)
-	for i, a := range s.args {
-		binary.LittleEndian.PutUint32(mem[argvPtr+int32(i*4):], bufOff)
-		n := copy(mem[bufOff:], a)
+	writeStringTable(s.mem(), argvPtr, argvBufPtr, s.args)
+	return wasiESuccess
+}
+
+func writeStringTableSizes(mem []byte, countPtr, bufSizePtr int32, items []string) {
+	binary.LittleEndian.PutUint32(mem[countPtr:], uint32(len(items)))
+	var total uint32
+	for _, s := range items {
+		total += uint32(len(s)) + 1
+	}
+	binary.LittleEndian.PutUint32(mem[bufSizePtr:], total)
+}
+
+func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
+	bufOff := uint32(bufBase)
+	for i, s := range items {
+		binary.LittleEndian.PutUint32(mem[ptrBase+int32(i*4):], bufOff)
+		n := copy(mem[bufOff:], s)
 		mem[bufOff+uint32(n)] = 0
 		bufOff += uint32(n) + 1
 	}
-	return wasiESuccess
 }
 func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 	clean := path.Clean("/" + guestPath)
