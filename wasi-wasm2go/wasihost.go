@@ -166,21 +166,58 @@ func (s *State) Xrandom_get(bufPtr, bufLen int32) int32 {
 	return wasiESuccess
 }
 
-// Xclock_time_get: stub returns wasiENoSys for all clock IDs — test expects ESUCCESS for 0,1
 func (s *State) Xclock_time_get(clockID int32, precision int64, resultPtr int32) int32 {
-	return wasiENoSys // stub: wrong — test for clockID 0,1 expects ESUCCESS
+	mem := s.mem()
+	switch clockID {
+	case 0: // realtime
+		binary.LittleEndian.PutUint64(mem[resultPtr:], uint64(time.Now().UnixNano()))
+		return wasiESuccess
+	case 1: // monotonic
+		var t int64
+		if s.startTime.IsZero() {
+			t = time.Now().UnixNano()
+		} else {
+			t = time.Since(s.startTime).Nanoseconds()
+		}
+		binary.LittleEndian.PutUint64(mem[resultPtr:], uint64(t))
+		return wasiESuccess
+	default:
+		return wasiENoSys
+	}
 }
 
-// Xclock_res_get: stub returns wasiENoSys for all — test expects ESUCCESS for 0,1
 func (s *State) Xclock_res_get(clockID int32, resultPtr int32) int32 {
-	return wasiENoSys // stub: wrong
+	switch clockID {
+	case 0, 1:
+		binary.LittleEndian.PutUint64(s.mem()[resultPtr:], 1)
+		return wasiESuccess
+	default:
+		return wasiENoSys
+	}
 }
 
-// Xargs_sizes_get: stub writes nothing, returns 0 — test expects count=3, buf_size=16
-func (s *State) Xargs_sizes_get(argcPtr, argvSizePtr int32) int32 { return wasiESuccess }
+func (s *State) Xargs_sizes_get(argcPtr, argvSizePtr int32) int32 {
+	mem := s.mem()
+	binary.LittleEndian.PutUint32(mem[argcPtr:], uint32(len(s.args)))
+	var total uint32
+	for _, a := range s.args {
+		total += uint32(len(a)) + 1
+	}
+	binary.LittleEndian.PutUint32(mem[argvSizePtr:], total)
+	return wasiESuccess
+}
 
-// Xargs_get: stub writes nothing — test expects pointer array and strings
-func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 { return wasiESuccess }
+func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 {
+	mem := s.mem()
+	bufOff := uint32(argvBufPtr)
+	for i, a := range s.args {
+		binary.LittleEndian.PutUint32(mem[argvPtr+int32(i*4):], bufOff)
+		n := copy(mem[bufOff:], a)
+		mem[bufOff+uint32(n)] = 0
+		bufOff += uint32(n) + 1
+	}
+	return wasiESuccess
+}
 func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 	clean := path.Clean("/" + guestPath)
 	if clean == "." {
