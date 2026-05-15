@@ -96,9 +96,9 @@ type fdEntry struct {
 // mountEntry maps a guest path prefix to a host filesystem.
 type mountEntry struct {
 	guestPath string
-	writable  bool
-	hostRoot  string
 	root      fs.FS
+	hostRoot  string
+	writable  bool
 }
 
 type Option func(*State)
@@ -241,7 +241,6 @@ func (f *FSFileWrap) Seek(offset int64, whence int) (int64, error) {
 	}
 	return 0, fmt.Errorf("seek not supported")
 }
-
 
 func (s *State) Xenviron_sizes_get(countPtr, bufSizePtr int32) int32 {
 	writeStringTableSizes(s.mem(), countPtr, bufSizePtr, s.env)
@@ -1231,6 +1230,3 @@ const (
 	WasiENoSys   = wasiENoSys
 	WasiEROFS    = wasiEROFS
 )
-
-
-

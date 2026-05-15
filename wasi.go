@@ -15,6 +15,7 @@ type exitPanic struct{ code int32 }
 func (exitPanic) Error() string { return "proc_exit" }
 
 // wasiState wraps the standalone WASI host module with a guestIO for I/O bridging.
+// The real WASI implementation resides in github.com/lbe/wasi-wasm2go.
 type wasiState struct {
 	*wasihost.State
 	guestIO guestIO
