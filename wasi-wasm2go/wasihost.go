@@ -217,13 +217,77 @@ func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
 	}
 }
 
-// Stub: returns wasiESuccess but does NOT read from file or write to buf
 func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr int32) int32 {
+	if fd <= 2 {
+		return wasiEInval
+	}
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.file == nil {
+		return wasiEBadf
+	}
+	mem := s.mem()
+	var total uint32
+	curOff := offset
+	for i := int32(0); i < iovsCount; i++ {
+		off := iovsPtr + i*8
+		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
+		bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
+		if bufLen == 0 {
+			continue
+		}
+		var n int
+		var err error
+		ra, ok := entry.file.(interface{ ReadAt([]byte, int64) (int, error) })
+		if !ok {
+			break
+		}
+		n, err = ra.ReadAt(mem[bufPtr:bufPtr+bufLen], curOff)
+		total += uint32(n)
+		curOff += int64(n)
+		if err != nil {
+			break
+		}
+	}
+	binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
 	return wasiESuccess
 }
 
-// Stub: returns wasiESuccess but does NOT write to file
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
+	if fd <= 2 {
+		return wasiEInval
+	}
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.file == nil {
+		return wasiEBadf
+	}
+	mem := s.mem()
+	var total uint32
+	curOff := offset
+	for i := int32(0); i < iovsCount; i++ {
+		off := iovsPtr + i*8
+		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
+		bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
+		if bufLen == 0 {
+			continue
+		}
+		wa, ok := entry.file.(interface{ WriteAt([]byte, int64) (int, error) })
+		if !ok {
+			break // file doesn't support WriteAt
+		}
+		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], curOff)
+		total += uint32(n)
+		curOff += int64(n)
+		if err != nil {
+			break
+		}
+	}
+	binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
 	return wasiESuccess
 }
 
