@@ -443,6 +443,14 @@ func (s *State) Xsock_recv(fd, iovsPtr, iovsLen, riFlags, nreadPtr, roFlagsPtr i
 func (s *State) Xsock_send(fd, iovsPtr, iovsLen, siFlags, nsentPtr int32) int32 { return wasiENoSys }
 func (s *State) Xsock_shutdown(fd, how int32) int32                             { return wasiENoSys }
 
+func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 { return wasiESuccess }
+func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
+	return wasiESuccess
+}
+func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
+	return wasiESuccess
+}
+
 func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 	clean := path.Clean("/" + guestPath)
 	if clean == "." {
