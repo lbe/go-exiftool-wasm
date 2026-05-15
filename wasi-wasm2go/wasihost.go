@@ -443,11 +443,57 @@ func (s *State) Xsock_recv(fd, iovsPtr, iovsLen, riFlags, nreadPtr, roFlagsPtr i
 func (s *State) Xsock_send(fd, iovsPtr, iovsLen, siFlags, nsentPtr int32) int32 { return wasiENoSys }
 func (s *State) Xsock_shutdown(fd, how int32) int32                             { return wasiENoSys }
 
-func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 { return wasiESuccess }
+func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.file == nil {
+		return wasiEBadf
+	}
+	// Only truncate if backed by a real OS file (osFile)
+	if of, ok := entry.file.(*osFile); ok {
+		if err := of.Truncate(size); err != nil {
+			return int32(mapOSError(err))
+		}
+	}
+	// For fs.FS-backed files: no-op, return ESUCCESS
+	return wasiESuccess
+}
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
+	if fstFlags&2 == 0 {
+		// No-op: MTIM bit not set
+		return wasiESuccess
+	}
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.file == nil {
+		return wasiEBadf
+	}
+	if of, ok := entry.file.(*osFile); ok {
+		mtime := time.Unix(0, mtim)
+		atime := time.Now() // preserve access time
+		if err := os.Chtimes(of.Name(), atime, mtime); err != nil {
+			return int32(mapOSError(err))
+		}
+	}
 	return wasiESuccess
 }
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
+	if fstFlags&2 == 0 {
+		return wasiESuccess
+	}
+	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
+	if primary == "" {
+		return wasiEROFS
+	}
+	mtime := time.Unix(0, mtim)
+	atime := time.Now()
+	if err := os.Chtimes(primary, atime, mtime); err != nil {
+		return int32(mapOSError(err))
+	}
 	return wasiESuccess
 }
 
