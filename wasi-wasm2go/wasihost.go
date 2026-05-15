@@ -321,6 +321,26 @@ func (s *State) Xpath_link(oldDirfd, oldFlags, oldPathPtr, oldPathLen, newDirfd,
 	return wasiESuccess
 }
 
+// Critical methods needed for ExifTool — stubs return ENOSYS to force test failure
+func (s *State) Xfd_close(fd int32) int32                                             { return wasiENoSys }
+func (s *State) Xfd_read(fd, iovsPtr, iovsCount, nreadPtr int32) int32                { return wasiENoSys }
+func (s *State) Xfd_write(fd, iovsPtr, iovsCount, nwrittenPtr int32) int32            { return wasiENoSys }
+func (s *State) Xfd_seek(fd int32, offset int64, whence, newOffsetPtr int32) int32    { return wasiENoSys }
+func (s *State) Xfd_readdir(fd, bufPtr, bufLen int32, cookie int64, bufUsedPtr int32) int32 {
+	return wasiENoSys
+}
+func (s *State) Xfd_filestat_get(fd, bufPtr int32) int32                              { return wasiENoSys }
+func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32) int32 { return wasiENoSys }
+func (s *State) Xpath_open(dirfd, lookupFlags, pathPtr, pathLen, oflags int32, rightsBase, rightsInheriting int64, fdFlags, fdPtr int32) int32 {
+	return wasiENoSys
+}
+func (s *State) Xpath_rename(oldDirfd, oldPathPtr, oldPathLen, newDirfd, newPathPtr, newPathLen int32) int32 {
+	return wasiENoSys
+}
+
+// Xenv interface — returns 0 (no-op for the host function call bridge)
+func (s *State) Xcall_host_function(v0, v1, v2 int32) int32 { return 0 }
+
 func writeStringTableSizes(mem []byte, countPtr, bufSizePtr int32, items []string) {
 	binary.LittleEndian.PutUint32(mem[countPtr:], uint32(len(items)))
 	var total uint32
@@ -432,6 +452,9 @@ func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 
 func (s *State) Xsched_yield() int32                                           { return wasiESuccess }
 func (s *State) Xfd_datasync(fd int32) int32                                   { return wasiESuccess }
+func (s *State) Xfd_sync(fd int32) int32                                       { return wasiESuccess }
+func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32                    { return wasiESuccess }
+func (s *State) Xpoll_oneoff(in, out, nsubscriptions, nevents int32) int32     { return wasiENoSys }
 func (s *State) Xfd_advise(fd int32, offset, length int64, advice int32) int32 { return wasiESuccess }
 func (s *State) Xfd_allocate(fd int32, offset, length int64) int32             { return wasiESuccess }
 func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32  { return wasiESuccess }
