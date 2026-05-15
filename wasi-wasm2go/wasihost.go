@@ -785,6 +785,9 @@ func (s *State) Xfd_close(fd int32) int32 {
 	if s.fds[fd].preopen {
 		return wasiEBadf
 	}
+	if s.fds[fd].file == nil && s.fds[fd].fdType == 0 {
+		return wasiEBadf
+	}
 	if s.fds[fd].file != nil {
 		s.fds[fd].file.Close()
 	}
@@ -1539,34 +1542,6 @@ func applyMtim(path string, mtim int64) int32 {
 	return wasiESuccess
 }
 
-// ResolvePath resolves a guest-absolute path to its best-matching mount
-// and a mount-relative path string. Exported for white-box testing of
-// mount configuration; not intended for general use.
-func (s *State) ResolvePath(guestPath string) (*mountEntry, string) {
-	return s.resolvePath(guestPath)
-}
-
-// ReadBytes reads length bytes from guest memory at ptr. Returns nil if
-// ptr or length is zero. Exported for white-box testing; not intended for
-// general use.
-func (s *State) ReadBytes(ptr, length int32) []byte {
-	return s.readBytes(ptr, length)
-}
-
-// AssertSingleOwner invokes the goroutine-ownership assertion if
-// [WithOwnerAssertion] was passed to [New]. Exported for white-box testing
-// of the ownership invariant; not intended for general use.
-func (s *State) AssertSingleOwner() {
-	s.assertSingleOwner()
-}
-
-// LogTrace writes a formatted trace line to os.Stdout if [WithTracing]
-// was passed to [New]. Exported for white-box testing of trace-enabled
-// code paths; not intended for general use.
-func (s *State) LogTrace(format string, args ...interface{}) {
-	s.logTrace(format, args...)
-}
-
 // mapOSError converts a host OS error to the closest WASI errno value.
 // Canonical mappings: ErrNotExist→ENOENT(44), ErrExist→EEXIST(20),
 // ENOTEMPTY→ENOTEMPTY(55). All other errors map to EIO(29).
@@ -1583,12 +1558,3 @@ func mapOSError(err error) uint32 {
 	return 29
 }
 
-// WASI errno constants exported for use in tests that assert on return
-// values of X-prefixed methods. Only the subset required by the current
-// test suite is exported; the full set remains package-internal.
-const (
-	WasiESuccess = wasiESuccess // 0  — success
-	WasiEBadf    = wasiEBadf    // 8  — bad file descriptor
-	WasiENoSys   = wasiENoSys   // 52 — function not supported
-	WasiEROFS    = wasiEROFS    // 66 — read-only filesystem
-)

@@ -201,4 +201,63 @@ func TestGroupEPositionedIO(t *testing.T) {
         }
         _ = buf
     })
+
+    t.Run("Xfd_pread ReadAt-not-supported returns ESUCCESS nread 0", func(t *testing.T) {
+        // FSFileWrap does not support ReadAt, so the !ok break path is taken.
+        s, buf := newTestState()
+        dir := t.TempDir()
+        if err := os.WriteFile(dir+"/f.txt", []byte("ABCDE"), 0644); err != nil {
+            t.Fatal(err)
+        }
+        fsys := os.DirFS(dir)
+        f, err := fsys.Open("f.txt")
+        if err != nil {
+            t.Fatal(err)
+        }
+        t.Cleanup(func() { f.Close() })
+        for len(s.fds) <= 5 {
+            s.fds = append(s.fds, fdEntry{})
+        }
+        s.fds[5] = fdEntry{fdType: 4, file: &FSFileWrap{File: f}}
+        binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
+        binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 4)
+        errno := s.Xfd_pread(5, iovPtrOff, 1, 0, nresOff)
+        if errno != wasiESuccess {
+            t.Errorf("Xfd_pread FSFileWrap = %d, want ESUCCESS", errno)
+        }
+        nread := binary.LittleEndian.Uint32(buf[nresOff : nresOff+4])
+        if nread != 0 {
+            t.Errorf("nread = %d, want 0 (ReadAt not supported)", nread)
+        }
+    })
+
+    t.Run("Xfd_pwrite WriteAt-not-supported returns ESUCCESS nwritten 0", func(t *testing.T) {
+        // FSFileWrap does not support WriteAt, so the !ok break path is taken.
+        s, buf := newTestState()
+        dir := t.TempDir()
+        if err := os.WriteFile(dir+"/w.txt", []byte("ABCDE"), 0644); err != nil {
+            t.Fatal(err)
+        }
+        fsys := os.DirFS(dir)
+        f, err := fsys.Open("w.txt")
+        if err != nil {
+            t.Fatal(err)
+        }
+        t.Cleanup(func() { f.Close() })
+        for len(s.fds) <= 5 {
+            s.fds = append(s.fds, fdEntry{})
+        }
+        s.fds[5] = fdEntry{fdType: 4, file: &FSFileWrap{File: f}}
+        copy(buf[iovDataOff:], "XYZ")
+        binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
+        binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 3)
+        errno := s.Xfd_pwrite(5, iovPtrOff, 1, 0, nresOff)
+        if errno != wasiESuccess {
+            t.Errorf("Xfd_pwrite FSFileWrap = %d, want ESUCCESS", errno)
+        }
+        nwritten := binary.LittleEndian.Uint32(buf[nresOff : nresOff+4])
+        if nwritten != 0 {
+            t.Errorf("nwritten = %d, want 0 (WriteAt not supported)", nwritten)
+        }
+    })
 }

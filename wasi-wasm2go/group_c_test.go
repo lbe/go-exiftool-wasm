@@ -137,4 +137,38 @@ func TestFilestatMutations(t *testing.T) {
 			t.Errorf("mtime = %v, want within 2s of %v (diff=%v)", fi.ModTime(), targetMtim, diff)
 		}
 	})
+
+	t.Run("Xpath_filestat_set_times fstFlags=0 is no-op", func(t *testing.T) {
+		s, buf := newTestState()
+		hostDir := setupWritableMount(t, s, buf)
+		fname := "noop.txt"
+		if err := os.WriteFile(filepath.Join(hostDir, fname), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		fi0, err := os.Stat(filepath.Join(hostDir, fname))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := fi0.ModTime()
+		pathOff, pathLen := writePath(buf, 500, fname)
+
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, 0)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_filestat_set_times fstFlags=0 = %d, want ESUCCESS", errno)
+		}
+		fi1, err := os.Stat(filepath.Join(hostDir, fname))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !fi1.ModTime().Equal(before) {
+			t.Errorf("mtime changed: before=%v after=%v", before, fi1.ModTime())
+		}
+	})
+
+	t.Run("applyMtim error on nonexistent path", func(t *testing.T) {
+		errno := applyMtim("/nonexistent/path/deleted.txt", targetMtimNs)
+		if errno == wasiESuccess {
+			t.Error("applyMtim on missing path returned ESUCCESS, want error")
+		}
+	})
 }

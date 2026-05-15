@@ -223,4 +223,43 @@ func TestGroupAFoundation(t *testing.T) {
 			t.Errorf("got rel %q, want %q", rel, "lib/x")
 		}
 	})
+
+	t.Run("readBytes ptr==0 returns nil", func(t *testing.T) {
+		s, _ := newTestState()
+		if got := s.readBytes(0, 10); got != nil {
+			t.Errorf("readBytes(0, 10) = %v, want nil", got)
+		}
+	})
+
+	t.Run("mountHostPaths non-root mount has no fallback", func(t *testing.T) {
+		dir := t.TempDir()
+		m := &mountEntry{guestPath: "/work", hostRoot: dir, writable: true}
+		primary, fallback := mountHostPaths(m, "some/file.txt")
+		if primary == "" {
+			t.Error("primary should be non-empty for writable non-root mount")
+		}
+		if fallback != "" {
+			t.Errorf("fallback = %q, want empty for non-root mount", fallback)
+		}
+	})
+
+	t.Run("resolveDirfdPath non-preopen dir fd", func(t *testing.T) {
+		s, _ := newTestState()
+		s.mounts = []mountEntry{{guestPath: "/tmp", writable: false}}
+		for len(s.fds) <= 5 {
+			s.fds = append(s.fds, fdEntry{})
+		}
+		// fd 5 is a non-preopen dir fd whose stored path is "/tmp/subdir"
+		s.fds[5] = fdEntry{fdType: fdDir, path: "/tmp/subdir", preopen: false}
+		buf := make([]byte, 65536)
+		s.mem = func() []byte { return buf }
+		copy(buf[1000:], "child.txt")
+		mount, rel := s.resolveDirfdPath(5, 1000, 9)
+		if mount == nil {
+			t.Fatal("expected non-nil mount")
+		}
+		if rel != "subdir/child.txt" {
+			t.Errorf("rel = %q, want subdir/child.txt", rel)
+		}
+	})
 }
