@@ -473,11 +473,7 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 		return wasiEBadf
 	}
 	if of, ok := entry.file.(*osFile); ok {
-		mtime := time.Unix(0, mtim)
-		atime := time.Now() // preserve access time
-		if err := os.Chtimes(of.Name(), atime, mtime); err != nil {
-			return int32(mapOSError(err))
-		}
+		return applyMtim(of.Name(), mtim)
 	}
 	return wasiESuccess
 }
@@ -489,9 +485,13 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 	if primary == "" {
 		return wasiEROFS
 	}
+	return applyMtim(primary, mtim)
+}
+
+func applyMtim(path string, mtim int64) int32 {
 	mtime := time.Unix(0, mtim)
-	atime := time.Now()
-	if err := os.Chtimes(primary, atime, mtime); err != nil {
+	atime := time.Now() // preserve access time
+	if err := os.Chtimes(path, atime, mtime); err != nil {
 		return int32(mapOSError(err))
 	}
 	return wasiESuccess
