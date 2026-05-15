@@ -91,7 +91,6 @@ func WithStderr(w io.Writer) Option                                   { return f
 func WithTracing() Option                                             { return func(*State) {} }
 func WithOwnerAssertion() Option                                      { return func(*State) {} }
 
-
 func (s *State) Xenviron_sizes_get(countPtr, bufSizePtr int32) int32 {
 	writeStringTableSizes(s.mem(), countPtr, bufSizePtr, s.env)
 	return wasiESuccess
@@ -240,7 +239,9 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 		}
 		var n int
 		var err error
-		ra, ok := entry.file.(interface{ ReadAt([]byte, int64) (int, error) })
+		ra, ok := entry.file.(interface {
+			ReadAt([]byte, int64) (int, error)
+		})
 		if !ok {
 			break
 		}
@@ -276,7 +277,9 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 		if bufLen == 0 {
 			continue
 		}
-		wa, ok := entry.file.(interface{ WriteAt([]byte, int64) (int, error) })
+		wa, ok := entry.file.(interface {
+			WriteAt([]byte, int64) (int, error)
+		})
 		if !ok {
 			break // file doesn't support WriteAt
 		}
@@ -303,18 +306,18 @@ func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 	return wasiESuccess
 }
 
-func (s *State) Xsched_yield() int32 { return wasiESuccess }
-func (s *State) Xfd_datasync(fd int32) int32 { return wasiESuccess }
+func (s *State) Xsched_yield() int32                                           { return wasiESuccess }
+func (s *State) Xfd_datasync(fd int32) int32                                   { return wasiESuccess }
 func (s *State) Xfd_advise(fd int32, offset, length int64, advice int32) int32 { return wasiESuccess }
-func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 { return wasiESuccess }
-func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 { return wasiESuccess }
-func (s *State) Xproc_raise(signal int32) int32 { return wasiENoSys }
-func (s *State) Xsock_accept(fd, flags, resultPtr int32) int32 { return wasiENoSys }
+func (s *State) Xfd_allocate(fd int32, offset, length int64) int32             { return wasiESuccess }
+func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32  { return wasiESuccess }
+func (s *State) Xproc_raise(signal int32) int32                                { return wasiENoSys }
+func (s *State) Xsock_accept(fd, flags, resultPtr int32) int32                 { return wasiENoSys }
 func (s *State) Xsock_recv(fd, iovsPtr, iovsLen, riFlags, nreadPtr, roFlagsPtr int32) int32 {
 	return wasiENoSys
 }
 func (s *State) Xsock_send(fd, iovsPtr, iovsLen, siFlags, nsentPtr int32) int32 { return wasiENoSys }
-func (s *State) Xsock_shutdown(fd, how int32) int32 { return wasiENoSys }
+func (s *State) Xsock_shutdown(fd, how int32) int32                             { return wasiENoSys }
 
 func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 	clean := path.Clean("/" + guestPath)
