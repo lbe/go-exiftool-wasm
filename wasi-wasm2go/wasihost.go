@@ -197,6 +197,34 @@ func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 {
 	return wasiESuccess
 }
 
+func (s *State) readBytes(ptr, length int32) []byte {
+	if ptr == 0 || length == 0 {
+		return nil
+	}
+	return s.mem()[ptr : ptr+length]
+}
+
+func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, string) {
+	return nil, ""
+}
+
+func mountHostPaths(m *mountEntry, rel string) (primary, fallback string) {
+	return "", ""
+}
+
+func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 { return wasiESuccess }
+func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 { return wasiESuccess }
+func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32      { return wasiESuccess }
+func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr int32) int32 {
+	return wasiESuccess
+}
+func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPathLen int32) int32 {
+	return wasiESuccess
+}
+func (s *State) Xpath_link(oldDirfd, oldFlags, oldPathPtr, oldPathLen, newDirfd, newPathPtr, newPathLen int32) int32 {
+	return wasiESuccess
+}
+
 func writeStringTableSizes(mem []byte, countPtr, bufSizePtr int32, items []string) {
 	binary.LittleEndian.PutUint32(mem[countPtr:], uint32(len(items)))
 	var total uint32
