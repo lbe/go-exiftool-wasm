@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -205,23 +206,115 @@ func (s *State) readBytes(ptr, length int32) []byte {
 }
 
 func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, string) {
+	pathBytes := s.readBytes(pathPtr, pathLen)
+	guestPath := string(pathBytes)
+	if dirfd >= 0 && int(dirfd) < len(s.fds) {
+		entry := s.fds[dirfd]
+		if entry.preopen && entry.mount >= 0 && entry.mount < len(s.mounts) {
+			return &s.mounts[entry.mount], path.Clean(guestPath)
+		}
+	}
 	return nil, ""
 }
 
 func mountHostPaths(m *mountEntry, rel string) (primary, fallback string) {
-	return "", ""
+	if m == nil || !m.writable || m.hostRoot == "" {
+		return "", ""
+	}
+	return filepath.Join(m.hostRoot, filepath.FromSlash(rel)), ""
 }
 
-func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 { return wasiESuccess }
-func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 { return wasiESuccess }
-func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32      { return wasiESuccess }
+func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
+	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	primary, _ := mountHostPaths(m, rel)
+	if primary == "" {
+		return wasiEROFS
+	}
+	if err := os.Mkdir(primary, 0755); err != nil {
+		return int32(mapOSError(err))
+	}
+	return wasiESuccess
+}
+
+func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
+	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	primary, _ := mountHostPaths(m, rel)
+	if primary == "" {
+		return wasiEROFS
+	}
+	fi, err := os.Lstat(primary)
+	if err != nil {
+		return int32(mapOSError(err))
+	}
+	if !fi.IsDir() {
+		return wasiENotDir
+	}
+	if err := os.Remove(primary); err != nil {
+		return int32(mapOSError(err))
+	}
+	return wasiESuccess
+}
+
+func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
+	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	primary, _ := mountHostPaths(m, rel)
+	if primary == "" {
+		return wasiEROFS
+	}
+	fi, err := os.Lstat(primary)
+	if err != nil {
+		return int32(mapOSError(err))
+	}
+	if fi.IsDir() {
+		return wasiEIsdir
+	}
+	if err := os.Remove(primary); err != nil {
+		return int32(mapOSError(err))
+	}
+	return wasiESuccess
+}
+
 func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr int32) int32 {
+	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	primary, _ := mountHostPaths(m, rel)
+	if primary == "" {
+		return wasiEROFS
+	}
+	target, err := os.Readlink(primary)
+	if err != nil {
+		return int32(mapOSError(err))
+	}
+	mem := s.mem()
+	n := copy(mem[bufPtr:bufPtr+bufLen], target)
+	binary.LittleEndian.PutUint32(mem[nreadPtr:], uint32(n))
 	return wasiESuccess
 }
+
 func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPathLen int32) int32 {
+	// oldPath is the symlink target (literal, not resolved via mount)
+	target := string(s.readBytes(oldPathPtr, oldPathLen))
+	m, rel := s.resolveDirfdPath(dirfd, newPathPtr, newPathLen)
+	primary, _ := mountHostPaths(m, rel)
+	if primary == "" {
+		return wasiEROFS
+	}
+	if err := os.Symlink(target, primary); err != nil {
+		return int32(mapOSError(err))
+	}
 	return wasiESuccess
 }
+
 func (s *State) Xpath_link(oldDirfd, oldFlags, oldPathPtr, oldPathLen, newDirfd, newPathPtr, newPathLen int32) int32 {
+	oldMount, oldRel := s.resolveDirfdPath(oldDirfd, oldPathPtr, oldPathLen)
+	newMount, newRel := s.resolveDirfdPath(newDirfd, newPathPtr, newPathLen)
+	oldPrimary, _ := mountHostPaths(oldMount, oldRel)
+	newPrimary, _ := mountHostPaths(newMount, newRel)
+	if oldPrimary == "" || newPrimary == "" {
+		return wasiEROFS
+	}
+	if err := os.Link(oldPrimary, newPrimary); err != nil {
+		return int32(mapOSError(err))
+	}
 	return wasiESuccess
 }
 
