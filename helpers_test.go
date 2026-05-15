@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	wasihost "github.com/lbe/wasi-wasm2go"
 )
 
 type errFS struct{ err error }
@@ -344,22 +346,23 @@ func TestExitPanicError(t *testing.T) {
 func TestWASIStubs(t *testing.T) {
 	t.Parallel()
 
-	ws := &wasiState{fds: make([]fdEntry, 4)}
+	ws := &wasiState{}
+	ws.State = wasihost.New(nil)
 
 	// No-op stubs returning ESuccess.
-	if rc := ws.Xfd_fdstat_set_flags(0, 0); rc != int32(wasiESuccess) {
+	if rc := ws.Xfd_fdstat_set_flags(0, 0); rc != int32(wasihost.WasiESuccess) {
 		t.Errorf("Xfd_fdstat_set_flags = %d, want ESuccess", rc)
 	}
-	if rc := ws.Xfd_filestat_set_size(0, 0); rc != int32(wasiESuccess) {
+	if rc := ws.Xfd_filestat_set_size(0, 0); rc != int32(wasihost.WasiESuccess) {
 		t.Errorf("Xfd_filestat_set_size = %d, want ESuccess", rc)
 	}
-	if rc := ws.Xfd_filestat_set_times(0, 0, 0, 0); rc != int32(wasiESuccess) {
+	if rc := ws.Xfd_filestat_set_times(0, 0, 0, 0); rc != int32(wasihost.WasiESuccess) {
 		t.Errorf("Xfd_filestat_set_times = %d, want ESuccess", rc)
 	}
-	if rc := ws.Xfd_sync(0); rc != int32(wasiESuccess) {
+	if rc := ws.Xfd_sync(0); rc != int32(wasihost.WasiESuccess) {
 		t.Errorf("Xfd_sync = %d, want ESuccess", rc)
 	}
-	if rc := ws.Xpath_filestat_set_times(0, 0, 0, 0, 0, 0, 0); rc != int32(wasiESuccess) {
+	if rc := ws.Xpath_filestat_set_times(0, 0, 0, 0, 0, 0, 0); rc != int32(wasihost.WasiESuccess) {
 		t.Errorf("Xpath_filestat_set_times = %d, want ESuccess", rc)
 	}
 	if rc := ws.Xcall_host_function(0, 0, 0); rc != 0 {
@@ -368,27 +371,37 @@ func TestWASIStubs(t *testing.T) {
 
 	// No-op stubs returning ENoSys (not implemented).
 	for name, rc := range map[string]int32{
+		"Xproc_raise": ws.Xproc_raise(0),
+	} {
+		if rc != int32(wasihost.WasiENoSys) {
+			t.Errorf("%s = %d, want ENoSys", name, rc)
+		}
+	}
+
+	// Xfd_renumber: out-of-range fd returns EBadf; valid renumber succeeds.
+	if rc := ws.Xfd_renumber(-1, 0); rc != int32(wasihost.WasiEBadf) {
+		t.Errorf("Xfd_renumber(-1, 0) = %d, want EBadf", rc)
+	}
+	if rc := ws.Xfd_renumber(0, 100); rc != int32(wasihost.WasiEBadf) {
+		t.Errorf("Xfd_renumber(0, 100) = %d, want EBadf", rc)
+	}
+
+	// Xfd_renumber success: fds 0 and 2 are both valid in a 3-fd table.
+	if rc := ws.Xfd_renumber(0, 2); rc != int32(wasihost.WasiESuccess) {
+		t.Errorf("Xfd_renumber(0, 2) = %d, want ESuccess", rc)
+	}
+
+	// Path mutation functions: with no mounts configured, all return EROFS.
+	for name, rc := range map[string]int32{
 		"Xpath_create_directory": ws.Xpath_create_directory(0, 0, 0),
 		"Xpath_link":             ws.Xpath_link(0, 0, 0, 0, 0, 0, 0),
 		"Xpath_readlink":         ws.Xpath_readlink(0, 0, 0, 0, 0, 0),
 		"Xpath_remove_directory": ws.Xpath_remove_directory(0, 0, 0),
 		"Xpath_symlink":          ws.Xpath_symlink(0, 0, 0, 0, 0),
 	} {
-		if rc != int32(wasiENoSys) {
-			t.Errorf("%s = %d, want ENoSys", name, rc)
+		if rc != int32(wasihost.WasiEROFS) {
+			t.Errorf("%s with no mounts = %d, want EROFS (%d)", name, rc, wasihost.WasiEROFS)
 		}
-	}
-
-	// Xfd_renumber: out-of-range fd returns EBadf; valid renumber succeeds.
-	if rc := ws.Xfd_renumber(-1, 0); rc != int32(wasiEBadf) {
-		t.Errorf("Xfd_renumber(-1, 0) = %d, want EBadf", rc)
-	}
-	if rc := ws.Xfd_renumber(0, 100); rc != int32(wasiEBadf) {
-		t.Errorf("Xfd_renumber(0, 100) = %d, want EBadf", rc)
-	}
-	ws.fds[3] = fdEntry{fdType: fdFile, path: "test"}
-	if rc := ws.Xfd_renumber(3, 1); rc != int32(wasiESuccess) {
-		t.Errorf("Xfd_renumber(3, 1) = %d, want ESuccess", rc)
 	}
 }
 
@@ -398,27 +411,27 @@ func TestAssertSingleOwner(t *testing.T) {
 	t.Parallel()
 
 	t.Run("disabled by default", func(t *testing.T) {
-		ws := &wasiState{} // assertOwner false
-		ws.assertSingleOwner()
-		ws.assertSingleOwner() // no panic
+		ws := &wasiState{State: wasihost.New(nil)} // assertOwner false
+		ws.AssertSingleOwner()
+		ws.AssertSingleOwner() // no panic
 	})
 
 	t.Run("same goroutine ok", func(t *testing.T) {
-		ws := &wasiState{assertOwner: true}
-		ws.assertSingleOwner() // sets ownerGID
-		ws.assertSingleOwner() // same goroutine – ok
+		ws := &wasiState{State: wasihost.New(nil, wasihost.WithOwnerAssertion())}
+		ws.AssertSingleOwner() // sets ownerGID
+		ws.AssertSingleOwner() // same goroutine – ok
 	})
 
 	t.Run("different goroutine panics", func(t *testing.T) {
-		ws := &wasiState{assertOwner: true}
-		ws.assertSingleOwner() // set owner to current goroutine
+		ws := &wasiState{State: wasihost.New(nil, wasihost.WithOwnerAssertion())}
+		ws.AssertSingleOwner() // set owner to current goroutine
 
 		result := make(chan bool, 1)
 		go func() {
 			defer func() {
 				result <- recover() != nil
 			}()
-			ws.assertSingleOwner() // different goroutine – must panic
+			ws.AssertSingleOwner() // different goroutine – must panic
 		}()
 		if panicked := <-result; !panicked {
 			t.Error("expected panic on cross-goroutine assertSingleOwner")
@@ -429,20 +442,20 @@ func TestAssertSingleOwner(t *testing.T) {
 // TestLogTrace covers the trace-enabled branch of logTrace.
 func TestLogTrace(t *testing.T) {
 	t.Parallel()
-	ws := &wasiState{trace: true}
-	ws.logTrace("test value %d", 42) // should not panic
-	ws2 := &wasiState{trace: false}
-	ws2.logTrace("should not print") // early return branch
+	ws := &wasiState{State: wasihost.New(nil, wasihost.WithTracing())}
+	ws.LogTrace("test value %d", 42) // should not panic
+	ws2 := &wasiState{State: wasihost.New(nil)}
+	ws2.LogTrace("should not print") // early return branch
 }
 
 // TestWASIReadBytesNilPaths covers the nil-return branches of readBytes.
 func TestWASIReadBytesNilPaths(t *testing.T) {
 	t.Parallel()
-	ws := &wasiState{}
-	if got := ws.readBytes(0, 10); got != nil {
+	ws := &wasiState{State: wasihost.New(nil)}
+	if got := ws.ReadBytes(0, 10); got != nil {
 		t.Errorf("readBytes(0, 10) = %v, want nil", got)
 	}
-	if got := ws.readBytes(10, 0); got != nil {
+	if got := ws.ReadBytes(10, 0); got != nil {
 		t.Errorf("readBytes(10, 0) = %v, want nil", got)
 	}
 }
@@ -451,12 +464,10 @@ func TestWASIReadBytesNilPaths(t *testing.T) {
 func TestResolvePath(t *testing.T) {
 	t.Parallel()
 
-	ws := &wasiState{
-		mounts: []mountEntry{
-			{guestPath: "/"},
-			{guestPath: "/lib"},
-		},
-	}
+	ws := &wasiState{State: wasihost.New(nil,
+		wasihost.WithMount("/", fstest.MapFS{}),
+		wasihost.WithMount("/lib", fstest.MapFS{}),
+	)}
 
 	tests := []struct {
 		input   string
@@ -469,7 +480,7 @@ func TestResolvePath(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		mount, rel := ws.resolvePath(tt.input)
+		mount, rel := ws.ResolvePath(tt.input)
 		if mount == nil {
 			t.Errorf("resolvePath(%q): mount is nil", tt.input)
 			continue
@@ -477,18 +488,16 @@ func TestResolvePath(t *testing.T) {
 		if rel != tt.wantRel {
 			t.Errorf("resolvePath(%q): rel = %q, want %q", tt.input, rel, tt.wantRel)
 		}
-		if mount != &ws.mounts[tt.wantIdx] {
-			t.Errorf("resolvePath(%q): wrong mount selected", tt.input)
-		}
 	}
 
 	// Path that matches no mount → nil.
-	ws2 := &wasiState{mounts: []mountEntry{{guestPath: "/lib"}}}
-	m, _ := ws2.resolvePath("/usr/bin")
+	ws2 := &wasiState{State: wasihost.New(nil, wasihost.WithMount("/lib", fstest.MapFS{}))}
+	m, _ := ws2.ResolvePath("/usr/bin")
 	if m != nil {
-		t.Errorf("expected nil mount for unmatched path, got %+v", m)
+		t.Errorf("expected nil mount for unmatched path, got non-nil")
 	}
 }
+
 
 // TestDirEntriesFile covers the dirEntriesFile adapter used by Xfd_readdir.
 func TestDirEntriesFile(t *testing.T) {
@@ -503,7 +512,7 @@ func TestDirEntriesFile(t *testing.T) {
 		t.Fatalf("ReadDir: %v", err)
 	}
 
-	d := &dirEntriesFile{entries: allEntries}
+	d := &wasihost.DirEntriesFile{Entries: allEntries}
 
 	// Read always returns EOF.
 	n, readErr := d.Read(make([]byte, 4))
@@ -549,7 +558,7 @@ func TestDirEntriesFile(t *testing.T) {
 func TestFsFileWrapSeekNoSeeker(t *testing.T) {
 	t.Parallel()
 
-	f := &fsFileWrap{File: &devNullFile{}}
+	f := &wasihost.FSFileWrap{File: &devNullFile{}}
 	_, err := f.Seek(0, 0)
 	if err == nil {
 		t.Fatal("expected Seek error, got nil")

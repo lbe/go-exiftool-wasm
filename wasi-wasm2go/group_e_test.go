@@ -133,7 +133,7 @@ func TestGroupEPositionedIO(t *testing.T) {
         }
     })
 
-    t.Run("Xfd_datasync on fsFileWrap-backed fd returns ESUCCESS", func(t *testing.T) {
+    t.Run("Xfd_datasync on FSFileWrap-backed fd returns ESUCCESS", func(t *testing.T) {
         s, _ := newTestState()
         dir := t.TempDir()
         if err := os.WriteFile(dir+"/f.txt", []byte("x"), 0644); err != nil {
@@ -148,7 +148,7 @@ func TestGroupEPositionedIO(t *testing.T) {
         for len(s.fds) <= 5 {
             s.fds = append(s.fds, fdEntry{})
         }
-        s.fds[5] = fdEntry{fdType: 4, file: &fsFileWrap{f}}
+        s.fds[5] = fdEntry{fdType: 4, file: &FSFileWrap{File: f}}
         if errno := s.Xfd_datasync(5); errno != wasiESuccess {
             t.Errorf("got %d, want ESUCCESS", errno)
         }

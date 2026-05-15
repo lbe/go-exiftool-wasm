@@ -37,7 +37,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xfd_filestat_set_size on fsFileWrap returns ESUCCESS with no mutation", func(t *testing.T) {
+	t.Run("Xfd_filestat_set_size on FSFileWrap returns ESUCCESS with no mutation", func(t *testing.T) {
 		s, _ := newTestState()
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "ro.txt"), []byte("HELLO"), 0644); err != nil {
@@ -52,7 +52,7 @@ func TestFilestatMutations(t *testing.T) {
 		for len(s.fds) <= 5 {
 			s.fds = append(s.fds, fdEntry{})
 		}
-		s.fds[5] = fdEntry{fdType: 4, file: &fsFileWrap{f}}
+		s.fds[5] = fdEntry{fdType: 4, file: &FSFileWrap{File: f}}
 
 		errno := s.Xfd_filestat_set_size(5, 99)
 		if errno != wasiESuccess {

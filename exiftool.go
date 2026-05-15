@@ -181,7 +181,6 @@ func newModule(gio guestIO, rootFS fs.FS, workFS fs.FS, writableDirs []string) (
 	ws := &wasiState{}
 	mod := wasm2go.New(ws, ws)
 	initWASIState(ws, mod, gio, mounts)
-	ws.trace = os.Getenv("EXIFTOOL_WASI_TRACE") == "1"
 
 	mod.X_initialize()
 
