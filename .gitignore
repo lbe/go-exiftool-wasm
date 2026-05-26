@@ -22,7 +22,7 @@
 .kilo
 .vscode
 AGENTS.md
-/.pi
+/.pi*
 opencode.json
 /bin/
 zeroper/zeroperl.wasm
