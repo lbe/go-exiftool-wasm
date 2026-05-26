@@ -41,5 +41,9 @@ func newDirectIO(stdin io.Reader) *directIO {
 func (d *directIO) ReadStdin(buf []byte) (int, error)   { return d.StdinR.Read(buf) }
 func (d *directIO) WriteStdout(buf []byte) (int, error) { return d.StdoutB.Write(buf) }
 func (d *directIO) WriteStderr(buf []byte) (int, error) { return d.StderrB.Write(buf) }
-func (d *directIO) CloseStdin()                         {}
-func (d *directIO) CloseAll()                           {}
+
+// CloseStdin is a no-op; directIO does not own the stdin reader.
+func (d *directIO) CloseStdin() {}
+
+// CloseAll is a no-op; directIO buffers are in-memory and need no cleanup.
+func (d *directIO) CloseAll() {}

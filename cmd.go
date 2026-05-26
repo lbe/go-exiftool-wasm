@@ -7,9 +7,9 @@ import (
 	"os"
 )
 
-// Command runs a single ExifTool invocation. Host paths are visible read-only
-// under "/" inside the sandbox and [os.TempDir] is mounted read-write for any
-// side effects ExifTool needs to perform. stdin is forwarded to ExifTool's
+// Command runs a single ExifTool invocation. The caller's working directory is
+// mounted writable at "/" via a WASI host directory preopen, and [os.TempDir] is
+// mounted read-write for ExifTool side effects. stdin is forwarded to ExifTool's
 // standard input; pass nil if no input is required.
 //
 // It uses [context.Background]; for cancellation see [CommandContext].
@@ -27,12 +27,10 @@ func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []
 	}
 
 	guestIO := newDirectIO(stdin)
-	mod, ws, err := newModule(guestIO, defaultRootFS(), nil, []string{os.TempDir()})
+	mod, ws, err := newModule(guestIO, nil, []string{os.TempDir()})
 	if err != nil {
 		return nil, err
 	}
-	_ = mod
-
 	args := commandArgs(arg)
 	out, err = evalModule(mod, ws, args...)
 	if err != nil {

@@ -5,9 +5,10 @@ import (
 	"errors"
 )
 
-// Unmarshal parses line-oriented ExifTool text output: each line must contain a key,
-// the substring ": ", and a value (covers the default format and -s / short output).
-// It does not parse JSON (-json), XML (-X), or other structured outputs.
+// Unmarshal parses line-oriented ExifTool text output into a map. Each line must
+// contain a key, the substring ": ", and a value. This covers the default format and
+// -s / short output. It does not parse JSON (-json), XML (-X), or other structured
+// outputs. Returns an error if data is empty or a line is malformed.
 //
 // Values stored in m are subslices of data; if data is reused or modified after the
 // call, entries in m may change. Copy with append([]byte(nil), v...) when retaining

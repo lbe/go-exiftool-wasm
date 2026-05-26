@@ -1,7 +1,7 @@
 # Architecture: go-exiftool
 
-This document describes the current wasm2go-native architecture: embedded Perl assets, custom WASI
-host implementation, and how single-shot APIs differ from Server stay_open mode.
+This document describes the current wasm2go-native architecture: embedded Perl assets, the external
+`wasm2go-wasi-host` WASI implementation, and how single-shot APIs differ from Server stay_open mode.
 
 ## Goals
 
@@ -25,7 +25,7 @@ flowchart TB
     MOD[wasm2go Module internal]
     WASI[wasiState host funcs]
     IO[guest I/O adapters]
-    FS[mount entries + overlay FS + internal cachedFS LRU + LZ4]
+    FS[host preopens + read-only FS mounts + internal cachedFS LRU + LZ4]
   end
   subgraph guest [zeroperl guest]
     ZP[zeroperl init/eval]
@@ -41,11 +41,12 @@ flowchart TB
 
 ## Embedded assets
 
-| Asset                  | Binding          | Role                                                                               |
-| ---------------------- | ---------------- | ---------------------------------------------------------------------------------- |
-| embed/perl-wasi-prefix | go:embed all     | Perl stdlib and wasm32-wasi modules (LZ4-compressed)                               |
-| internal/zeroperl      | generated source | Native Go representation of zeroperl guest module (not importable outside module)  |
-| cachefs.go             | package source   | internal cachedFS wrapper; transparent LZ4 decompression and LRU cache via cfsread |
+| Asset                           | Binding          | Role                                                                               |
+| ------------------------------- | ---------------- | ---------------------------------------------------------------------------------- |
+| embed/perl-wasi-prefix          | go:embed all     | Perl stdlib and wasm32-wasi modules (LZ4-compressed)                               |
+| internal/zeroperl               | generated source | Native Go representation of zeroperl guest module (not importable outside module)  |
+| github.com/lbe/wasm2go-wasi-host | go module        | External WASI host implementation replacing the former internal wasi-wasm2go module |
+| cachefs.go                      | package source   | internal cachedFS wrapper; transparent LZ4 decompression and LRU cache via cfsread |
 
 The ExifTool driver script is loaded from `embed/perl-wasi-prefix/bin/exiftool` inside the embedded
 perl-wasi-prefix tree.
@@ -54,32 +55,35 @@ The guest environment includes PERL5LIB=/lib/5.16.3:/lib/5.16.3/wasm32-wasi.
 
 ## WASI host implementation
 
-The host implementation lives in wasi.go and provides the Xwasi_snapshot_preview1 and Xenv methods
-expected by the generated module.
+The WASI host is provided by the external module **github.com/lbe/wasm2go-wasi-host**. Package
+`exiftool` wraps it in `wasiState` (defined in `wasi.go`) which overrides `Xproc_exit` to panic with
+`exitPanic{code}` instead of the host's default `ExitError`, allowing eval boundaries to recover it.
 
 Key behaviors:
 
-- Dynamic memory access via module.Xmemory().Slice() on each call (avoids stale slice after memory
+- Dynamic memory access via `module.Xmemory().Slice()` on each call (avoids stale slice after memory
   growth).
-- Preopen FDs are reserved in the FD table.
-- Path resolution supports longest-prefix guest mount matching and dirfd-relative paths.
-- Non-preopen directory fds store the resolved absolute guest path in `fdEntry.path`, enabling `resolveDirfdPath` to resolve relative paths for nested `path_open` calls (required for ExifTool `-r` recursion).
-- File operation semantics cover read/write/seek/tell/readdir/stat/open/rename and poll_oneoff.
-- proc_exit is modeled via panic(exitPanic{code}) and recovered at eval boundaries.
+- Mounts are configured via `wasihost.Option` values passed to `wasihost.New`.
+- proc_exit is modeled via `panic(exitPanic{code})` and recovered at eval boundaries.
 
 ## Filesystem/mount model
 
-Mounts are configured per module instantiation:
+Mounts are configured per module instantiation using `wasihost.Option` values:
 
-- `/` maps to **defaultRootFS** for Command and Server (embedded perl prefix overlaid with read-only
-  host `os.DirFS(".")`). The root mount is **writable** (`writable: true, hostRoot: cwd`) so
-  ExifTool can write output files directly into the caller's working directory.
-- `/dev` maps to devNullFS.
-- Writable host directories such as **os.TempDir()** are mounted with hostRoot metadata for
-  operations such as path_open and path_rename.
-- `Xpath_open` writable-branch fallback: when `oflags` has no create/trunc/excl bits set
-  (`uint32(oflags)&(oflagCreat|oflagTrunc|oflagExcl) == 0`), a failed `os.OpenFile` retries
-  against the overlay FS so embedded read-only resources (e.g. perl libraries) are still served.
+- `/` is a **writable host directory preopen** (`wasihost.WithHostDirectoryPreopen("/", cwd)`) so
+  ExifTool can read and write files in the caller's working directory.
+- `/lib` is a **read-only FS** (`wasihost.WithReadOnlyFS("/lib", fs.Sub(perlFS(), "lib"))`) serving
+  the embedded Perl standard library.
+- `/bin` is a **read-only FS** (`wasihost.WithReadOnlyFS("/bin", fs.Sub(perlFS(), "bin"))`) serving
+  the ExifTool script at `/bin/exiftool`.
+- `/dev` is a read-only FS backed by `devNullFS`.
+- Additional writable host directories (e.g. `os.TempDir()`) are mounted via
+  `wasihost.WithHostDirectoryPreopen(dir, dir)`.
+- An optional `/work` read-only FS can be supplied.
+
+This replaces the former `overlayFS` + `defaultRootFS()` approach, which layered the embedded Perl
+stdlib over the host working directory in a single mount. The new approach uses separate mounts for
+each concern, matching the `wasm2go-wasi-host` preopen model.
 
 `perlFS()` returns a process-level internal cachedFS singleton (initialized once via `sync.Once`)
 backed by a `cfsread.Reader` with LZ4 magic-byte decompression and a 2000-entry LRU cache. The
@@ -122,7 +126,7 @@ Server stay_open:
 | File        | Responsibility                                 |
 | ----------- | ---------------------------------------------- |
 | exiftool.go | module setup, eval path                        |
-| wasi.go     | WASI host and fd/mount behavior                |
+| wasi.go     | wasiState wrapper overriding Xproc_exit        |
 | io.go       | guestIO implementations                        |
 | cmd.go      | Command and CommandContext                     |
 | server.go   | stay_open server process model                 |

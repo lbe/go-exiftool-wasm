@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"sync"
 
@@ -52,7 +51,6 @@ type cmdStub struct {
 type Server struct {
 	srvMtx     sync.Mutex
 	cmdMtx     sync.Mutex
-	rootFS     fs.FS
 	args       []string
 	done       bool
 	cmd        *cmdStub
@@ -133,6 +131,7 @@ func (s *serverIO) DrainStderr(from int) []byte {
 	return result
 }
 
+// closeAll calls Close on each closer, joining any errors.
 func closeAll(closers ...io.Closer) error {
 	var errs []error
 	for _, c := range closers {
@@ -149,9 +148,7 @@ func closeAll(closers ...io.Closer) error {
 // The package-level [Arg1] and [Config] variables are also included.
 // Call [Server.Shutdown] or [Server.Close] when done to release resources.
 func NewServer(commonArg ...string) (*Server, error) {
-	e := &Server{
-		rootFS: defaultRootFS(),
-	}
+	e := &Server{}
 	e.cmd = &cmdStub{Process: &processStub{server: e}}
 
 	if Arg1 != "" {
@@ -188,7 +185,7 @@ func (e *Server) start() error {
 		return fmt.Errorf("failed to create pipes: %w", err)
 	}
 
-	mod, ws, err := newModule(sio, e.rootFS, nil, []string{os.TempDir()})
+	mod, ws, err := newModule(sio, nil, []string{os.TempDir()})
 	if err != nil {
 		_ = closeAll(sio.stdinR, sio.stdinW, sio.stdoutR, sio.stdoutW)
 		return fmt.Errorf("failed to create module: %w", err)

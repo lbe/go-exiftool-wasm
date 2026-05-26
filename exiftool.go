@@ -3,7 +3,6 @@ package exiftool
 import (
 	"embed"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/lbe/cfsread"
 	wasm2go "github.com/lbe/go-exiftool-wasm/internal/zeroperl"
+	wasihost "github.com/lbe/wasm2go-wasi-host"
 )
 
 // perlFSRoot holds the LZ4-compressed Perl standard library and wasm32-wasi
@@ -37,24 +37,6 @@ const exiftoolEvalWrapper = "BEGIN { my $old = select(STDOUT); $| = 1; select(ST
 // STDERR without loading additional modules, and restores the previously
 // selected default output handle so unqualified print still goes to STDOUT.
 const scriptPreamble = "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); }\n"
-
-// overlayFS implements fs.FS by trying each layer in order; the first layer
-// that can open the name wins. Earlier layers (lower index) shadow later
-// ones for any given path.
-type overlayFS struct {
-	layers []fs.FS
-}
-
-func (o *overlayFS) Open(name string) (fs.File, error) {
-	for _, layer := range o.layers {
-		if f, err := layer.Open(name); err == nil {
-			return f, nil
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return nil, err
-		}
-	}
-	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
-}
 
 // devNullFS is a read-only fs.FS that contains only a root directory (".") and
 // a "null" file that always returns EOF. It is mounted at /dev inside the
@@ -132,13 +114,6 @@ func perlFS() fs.FS {
 	return perlCachedFS
 }
 
-// defaultRootFS returns an overlay of the embedded Perl stdlib on top of the
-// host process working directory. This is the filesystem used by [Command],
-// [CommandContext], and [NewServer].
-func defaultRootFS() fs.FS {
-	return &overlayFS{layers: []fs.FS{perlFS(), os.DirFS(".")}}
-}
-
 // commandArgs builds the full ExifTool argument list by prepending the
 // package-level [Arg1] and [Config] variables and appending a UTF-8 charset
 // flag, followed by the caller-supplied args.
@@ -155,33 +130,43 @@ func commandArgs(arg []string) []string {
 	return args
 }
 
-// newModule creates a zeroperl wasm2go module with a WASI host layer wired to
-// the provided I/O adapter, filesystem mounts, and optional writable host
-// directories. It calls X_initialize on the module to set up memory and stack
+// newModule creates a zeroperl wasm2go module with a WASI host layer (provided by
+// github.com/lbe/wasm2go-wasi-host) wired to the provided I/O adapter and filesystem
+// mounts. Mounts are configured via wasihost.Option values: the caller's working
+// directory is a writable preopen at "/", the embedded Perl stdlib and ExifTool
+// script are read-only mounts at "/lib" and "/bin", and devNullFS is mounted at
+// "/dev". Additional writable host directories and an optional read-only /work FS
+// are supported. It calls X_initialize on the module to set up memory and stack
 // but does not evaluate any Perl script.
-func newModule(gio guestIO, rootFS fs.FS, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
-	// Mount "/" writable so the guest can write files in the process working
-	// directory. WASI is used here as an FFI transport, not a security boundary;
-	// CWD write access matches what a subprocess or CGo call would have.
+func newModule(gio guestIO, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, nil, fmt.Errorf("exiftool: getwd: %w", err)
 	}
-	mounts := []mountEntry{
-		{guestPath: "/", root: rootFS, writable: true, hostRoot: cwd},
-		{guestPath: "/dev", root: devNullFS{}, writable: false},
+	libFS, err := fs.Sub(perlFS(), "lib")
+	if err != nil {
+		return nil, nil, fmt.Errorf("exiftool: sub lib: %w", err)
+	}
+	binFS, err := fs.Sub(perlFS(), "bin")
+	if err != nil {
+		return nil, nil, fmt.Errorf("exiftool: sub bin: %w", err)
+	}
+	opts := []wasihost.Option{
+		wasihost.WithHostDirectoryPreopen("/", cwd),
+		wasihost.WithReadOnlyFS("/lib", libFS),
+		wasihost.WithReadOnlyFS("/bin", binFS),
+		wasihost.WithReadOnlyFS("/dev", devNullFS{}),
 	}
 	if workFS != nil {
-		mounts = append(mounts, mountEntry{guestPath: "/work", root: workFS, writable: false})
+		opts = append(opts, wasihost.WithReadOnlyFS("/work", workFS))
 	}
 	for _, dir := range writableDirs {
-		mounts = append(mounts, mountEntry{guestPath: dir, root: os.DirFS(dir), writable: true, hostRoot: dir})
+		opts = append(opts, wasihost.WithHostDirectoryPreopen(dir, dir))
 	}
 
 	ws := &wasiState{}
 	mod := wasm2go.New(ws, ws)
-	initWASIState(ws, mod, gio, mounts)
-	ws.trace = os.Getenv("EXIFTOOL_WASI_TRACE") == "1"
+	initWASIState(ws, mod, gio, opts)
 
 	mod.X_initialize()
 

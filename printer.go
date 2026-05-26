@@ -2,8 +2,9 @@ package exiftool
 
 import "io"
 
-// printer writes stay_open command lines to stdin, one string per line, reusing an internal buffer.
-// After the first write error, print becomes a no-op returning that error; close preserves it.
+// printer writes stay_open command lines to an io.WriteCloser, one string per line,
+// reusing an internal buffer to minimize allocations. After the first write error, print
+// becomes a no-op that returns the stored error; close preserves it.
 type printer struct {
 	w   io.WriteCloser
 	buf []byte

@@ -1,6 +1,10 @@
 github.com/lbe/cfsread v0.1.0 h1:zQnENmO0KugS/dcNHovfHq1tRdwpavj7ABiKuVtEIr0=
 github.com/lbe/cfsread v0.1.0/go.mod h1:NdMhirfC65uxadjucFZSDVO5h5TUexpa37IlcnPvmxo=
+github.com/lbe/wasm2go-wasi-host v0.0.0-20260526160322-0ef9cae8366c h1:WzNqUWtSAC0voA8j77nCN+zt8w0+aBUkV3juQ7NpV6I=
+github.com/lbe/wasm2go-wasi-host v0.0.0-20260526160322-0ef9cae8366c/go.mod h1:RIEgmOaTHDLPvCkYuj38mDUkuFiml7ABsZ4kuN9Kgh4=
 github.com/pierrec/lz4/v4 v4.1.26 h1:GrpZw1gZttORinvzBdXPUXATeqlJjqUG/D87TKMnhjY=
 github.com/pierrec/lz4/v4 v4.1.26/go.mod h1:EoQMVJgeeEOMsCqCzqFm2O0cJvljX2nGZjcRIPL34O4=
 golang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=
 golang.org/x/sync v0.20.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
+golang.org/x/sys v0.45.0 h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=
+golang.org/x/sys v0.45.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=

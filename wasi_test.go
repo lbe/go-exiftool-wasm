@@ -15,7 +15,7 @@ import (
 // read-write so the script can perform file I/O there.
 func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 	guestIO := newDirectIO(nil)
-	mod, ws, err := newModule(guestIO, defaultRootFS(), nil, []string{os.TempDir()})
+	mod, ws, err := newModule(guestIO, nil, []string{os.TempDir()})
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,7 @@ func TestCommandAbsolutePathOutsideCwd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	if err := os.WriteFile(dst, src, 0o644); err != nil {
+	if err = os.WriteFile(dst, src, 0o644); err != nil {
 		t.Fatalf("write fixture copy: %v", err)
 	}
 
@@ -328,7 +328,7 @@ func TestCommandAbsolutePathMultipleFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	if err := os.WriteFile(outside, src, 0o644); err != nil {
+	if err = os.WriteFile(outside, src, 0o644); err != nil {
 		t.Fatalf("write fixture copy: %v", err)
 	}
 

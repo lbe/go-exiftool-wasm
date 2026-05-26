@@ -1,10 +1,14 @@
 module github.com/lbe/go-exiftool-wasm
 
-go 1.26
+go 1.26.3
 
 require (
 	github.com/lbe/cfsread v0.1.0
+	github.com/lbe/wasm2go-wasi-host v0.0.0-20260526160322-0ef9cae8366c
 	github.com/pierrec/lz4/v4 v4.1.26
 )
 
-require golang.org/x/sync v0.20.0 // indirect
+require (
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+)

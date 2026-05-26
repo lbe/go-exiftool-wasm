@@ -10,21 +10,26 @@
 
 Go library that runs **[ExifTool](https://exiftool.org/)** in-process: embedded **Perl** via
 **[zeroperl](https://github.com/uswriting/zeroperl)** (Perl compiled to **WebAssembly**), executed
-as native Go via a wasm2go-generated module. You do **not** need a system `exiftool` binary or a
-separate Perl install.
+as native Go via a wasm2go-generated module with the
+**[wasm2go-wasi-host](https://github.com/lbe/wasm2go-wasi-host)** WASI host. You do **not** need a
+system `exiftool` binary or a separate Perl install.
 
 Upstream ExifTool (Phil Harvey) and metadata: [exiftool.org](https://exiftool.org/),
 [exiftool/exiftool](https://github.com/exiftool/exiftool).
 
 ## Why this shape
 
-- **Self-contained** — Perl stdlib, ExifTool, and the interpreter ship inside the module (`embed/`).
+- **Self-contained** - Perl stdlib, ExifTool, and the interpreter ship inside the module (`embed/`).
   The stdlib is stored LZ4-compressed; [`perlFS()`](exiftool.go) transparently decompresses files on
   first read using a 2000-entry LRU cache
   ([`lbe/cfsread`](https://pkg.go.dev/github.com/lbe/cfsread)).
-- **Same behavior everywhere** — one toolchain-based interpreter implementation on Linux, macOS,
+- **WASI host** - the external
+  [`github.com/lbe/wasm2go-wasi-host`](https://github.com/lbe/wasm2go-wasi-host) package provides
+  the WASI implementation, replacing the former internal `wasi-wasm2go` module. Mounts use
+  separate read-only FS mounts (`/lib`, `/bin`) and writable host directory preopens (`/`).
+- **Same behavior everywhere** - one toolchain-based interpreter implementation on Linux, macOS,
   Windows, etc.
-- **Trade-off** — cold start is heavy (on the order of **~7–10 seconds** to initialize the
+- **Trade-off** - cold start is heavy (on the order of **~7-10 seconds** to initialize the
   wasm2go-backed Perl runtime). For many operations, use **`NewServer`** and **`Server.Command`** so
   ExifTool stays open (`-stay_open`) and work is amortized.
 
@@ -37,7 +42,7 @@ Upstream ExifTool (Phil Harvey) and metadata: [exiftool.org](https://exiftool.or
 
 ```go
 // One-shot: paths are relative to the process working directory (host cwd is
-// layered read-only under "/" alongside the embedded perl prefix).
+// mounted writable at "/" via wasi host directory preopen).
 out, err := exiftool.Command(nil, "-json", "photo.jpg")
 
 // Batch: one Perl startup, many commands.
@@ -61,7 +66,7 @@ go test ./... -timeout 10m   # allow several minutes for interpreter-heavy paths
 ### Refreshing `embed/` from zeroperl
 
 The generated zeroperl Go source and Perl install prefix come from
-**[zeroperl](https://github.com/uswriting/zeroperl)**. Follow that repository’s **Build** section
+**[zeroperl](https://github.com/uswriting/zeroperl)**. Follow that repository's **Build** section
 (Docker or Apple Container): build the image, run the container, and copy **`/artifacts`** into a
 host directory (as shown there, e.g. `./output/`).
 
@@ -79,10 +84,10 @@ After copying `perl-wasi-prefix/` into `embed/`, run **`go generate ./...`** to 
 with `cfsread-lz4`. This updates the LZ4-compressed files in place so the embedded binary reflects
 the new Perl build.
 
-zeroperl’s README also documents **build arguments** (`PERL_VERSION`, `EXIFTOOL_VERSION`,
-`BUILD_EXIFTOOL`, memory/stack, etc.). If you change **`PERL_VERSION`**, update the **`perl5Lib`**
-segment in [perlversion.go](perlversion.go) so the runtime `PERL5LIB` path (`/lib/<segment>/…`)
-stays aligned with the embedded prefix layout.
+zeroperl's README also documents **build arguments** (`PERL_VERSION`, `EXIFTOOL_VERSION`,
+`BUILD_EXIFTOOL`, memory/stack, etc.). The Perl library layout segment determines the
+`PERL5LIB` path inside the guest (e.g. `/lib/5.16.3`, `/lib/5.16.3/wasm32-wasi`).
+After the migration this layout is fixed within the embedded `perl-wasi-prefix` tree.
 
 ### Building ExifTool prefix with `dist.pl`
 
