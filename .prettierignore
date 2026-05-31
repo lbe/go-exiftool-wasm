@@ -1,0 +1,22 @@
+# Go sources (gofmt / goimports)
+**/*.go
+
+# Embedded Perl tree and generated wasm2go output
+embed/**
+internal/zeroperl/**
+
+# Test fixtures and local tooling
+testdata/**
+dist/**
+.pi/**
+
+# Build / coverage artifacts
+coverage.out
+coverage.html
+*.test
+
+# Non-formatted or hand-maintained
+Makefile
+dist.pl
+go.mod
+go.sum

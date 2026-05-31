@@ -1,3 +1,5 @@
+//go:build integration
+
 package exiftool
 
 import (
@@ -226,8 +228,6 @@ func TestCommandContextTimeout(t *testing.T) {
 }
 
 func TestCommandWriteTag(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	// Create a temp copy of sample.jpg
 	src, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
@@ -263,8 +263,6 @@ func TestCommandWriteTag(t *testing.T) {
 }
 
 func TestCommandDeleteTag(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	src, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -299,8 +297,6 @@ func TestCommandDeleteTag(t *testing.T) {
 }
 
 func TestCommandCopyTags(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	src, err := os.ReadFile("testdata/sample_noexif.jpg")
 	if err != nil {
 		t.Fatal(err)

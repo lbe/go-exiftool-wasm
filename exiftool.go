@@ -1,12 +1,14 @@
 package exiftool
 
 import (
+	"crypto/rand"
 	"embed"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -15,9 +17,8 @@ import (
 	wasihost "github.com/lbe/wasm2go-wasi-host"
 )
 
-// perlFSRoot holds the LZ4-compressed Perl standard library and wasm32-wasi
-// modules rooted at embed/perl-wasi-prefix. Use [perlFS] to obtain an fs.FS
-// with transparent decompression.
+// perlFSRoot holds the embedded perl-wasi-prefix tree (LZ4-compressed on disk).
+// Use [perlFS] to obtain an fs.FS with transparent decompression.
 //
 //go:embed all:embed/perl-wasi-prefix
 var perlFSRoot embed.FS
@@ -29,18 +30,17 @@ var (
 
 const exiftoolScriptPath = "/bin/exiftool"
 
+// Guest mount contract: the writable host working directory is always preopened at
+// hostWorkDir, never at guest root (/). Perl preamble chdirs to hostWorkDir before
+// ExifTool runs so relative paths resolve against that mount instead of /.
+const hostWorkDir = "/host"
+
 // exiftoolEvalWrapper executes the embedded /bin/exiftool script via do().
-// It prepares autoflush, script name, and @INC for the perl-wasi-prefix tree.
-const exiftoolEvalWrapper = "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); unshift @INC, '/lib/perl5', '/lib/perl5/wasm32-wasi'; $0 = '/bin/exiftool'; } my $ok = do '" + exiftoolScriptPath + "'; die $@ if $@; die $! if !defined $ok;\n"
+// It prepares autoflush, script name, @INC, and chdir to hostWorkDir for the perl-wasi-prefix tree.
+const exiftoolEvalWrapper = "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); chdir '" + hostWorkDir + "' or die $!; unshift @INC, '/lib/perl5', '/lib/perl5/wasm32-wasi'; $0 = '/bin/exiftool'; } my $ok = do '" + exiftoolScriptPath + "'; die $@ if $@; die $! if !defined $ok;\n"
 
-// scriptPreamble is prepended before eval. It enables autoflush on STDOUT and
-// STDERR without loading additional modules, and restores the previously
-// selected default output handle so unqualified print still goes to STDOUT.
-const scriptPreamble = "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); }\n"
-
-// devNullFS is a read-only fs.FS that contains only a root directory (".") and
-// a "null" file that always returns EOF. It is mounted at /dev inside the
-// guest sandbox so Perl's built-in /dev/null open succeeds.
+// devNullFS is a read-only fs.FS mounted at /dev via wasihost.WithReadOnlyFS.
+// It exposes a synthetic "null" file so guest opens of /dev/null succeed.
 type devNullFS struct{}
 
 func (devNullFS) Open(name string) (fs.File, error) {
@@ -130,14 +130,66 @@ func commandArgs(arg []string) []string {
 	return args
 }
 
-// newModule creates a zeroperl wasm2go module with a WASI host layer (provided by
-// github.com/lbe/wasm2go-wasi-host) wired to the provided I/O adapter and filesystem
-// mounts. Mounts are configured via wasihost.Option values: the caller's working
-// directory is a writable preopen at "/", the embedded Perl stdlib and ExifTool
-// script are read-only mounts at "/lib" and "/bin", and devNullFS is mounted at
-// "/dev". Additional writable host directories and an optional read-only /work FS
-// are supported. It calls X_initialize on the module to set up memory and stack
-// but does not evaluate any Perl script.
+// hostDirPreopenGuestPaths returns guest-side absolute path spellings that must map
+// to the same host directory preopen. filepath.EvalSymlinks may resolve hostDir to a
+// different spelling (for example /var vs /private/var on macOS); every spelling
+// needs a wasihost.WithHostDirectoryPreopen alias so WASI path_open resolves
+// through the same writable mount.
+func hostDirPreopenGuestPaths(hostDir string) []string {
+	paths := []string{hostDir}
+	symlinkResolved, err := filepath.EvalSymlinks(hostDir)
+	if err != nil || symlinkResolved == hostDir {
+		return paths
+	}
+	return append(paths, symlinkResolved)
+}
+
+// registerHostDirPreopenAliases adds a writable preopen for every spelling
+// returned by [hostDirPreopenGuestPaths], each via wasihost.WithHostDirectoryPreopen.
+func registerHostDirPreopenAliases(moduleCfg *wasihost.ModuleConfig, hostDir string) *wasihost.ModuleConfig {
+	for _, guestPath := range hostDirPreopenGuestPaths(hostDir) {
+		moduleCfg = moduleCfg.WithHostDirectoryPreopen(guestPath, hostDir)
+	}
+	return moduleCfg
+}
+
+// buildModuleConfig assembles a wasihost.ModuleConfig for a zeroperl guest.
+//
+// Mount layout:
+//   - [hostWorkDir]: primary writable preopen for host cwd (never guest /)
+//   - /lib, /bin: read-only FS mounts (wasihost.WithReadOnlyFS) over embedded Perl tree
+//   - /dev: synthetic /dev/null (read-only FS)
+//   - /work: optional read-only workFS
+//   - host cwd aliases and writableDirs: extra writable preopens via registerHostDirPreopenAliases
+//
+// Also enables wall/nano clocks, nanosleep, and crypto/rand for WASI syscalls.
+func buildModuleConfig(cwd string, libFS, binFS fs.FS, workFS fs.FS, writableDirs []string) *wasihost.ModuleConfig {
+	moduleCfg := wasihost.NewModuleConfig().
+		WithReadOnlyFS("/lib", libFS).
+		WithReadOnlyFS("/bin", binFS).
+		WithHostDirectoryPreopen(hostWorkDir, cwd).
+		WithReadOnlyFS("/dev", devNullFS{}).
+		WithSysWalltime().
+		WithSysNanotime().
+		WithSysNanosleep().
+		WithRandSource(rand.Reader)
+
+	moduleCfg = registerHostDirPreopenAliases(moduleCfg, cwd)
+	if workFS != nil {
+		moduleCfg = moduleCfg.WithReadOnlyFS("/work", workFS)
+	}
+	for _, dir := range writableDirs {
+		moduleCfg = registerHostDirPreopenAliases(moduleCfg, dir)
+	}
+	return moduleCfg
+}
+
+// newModule creates a zeroperl wasm2go module and wires wasihost.State through
+// [initWASIState]. Filesystem mounts come from [buildModuleConfig]; stdio from
+// guestIO. Calls X_initialize on the module but does not evaluate any Perl script.
+//
+// Each module gets its own wasihost.State (not safe for concurrent use across
+// goroutines, per wasm2go-wasi-host).
 func newModule(gio guestIO, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -151,22 +203,10 @@ func newModule(gio guestIO, workFS fs.FS, writableDirs []string) (*wasm2go.Modul
 	if err != nil {
 		return nil, nil, fmt.Errorf("exiftool: sub bin: %w", err)
 	}
-	opts := []wasihost.Option{
-		wasihost.WithHostDirectoryPreopen("/", cwd),
-		wasihost.WithReadOnlyFS("/lib", libFS),
-		wasihost.WithReadOnlyFS("/bin", binFS),
-		wasihost.WithReadOnlyFS("/dev", devNullFS{}),
-	}
-	if workFS != nil {
-		opts = append(opts, wasihost.WithReadOnlyFS("/work", workFS))
-	}
-	for _, dir := range writableDirs {
-		opts = append(opts, wasihost.WithHostDirectoryPreopen(dir, dir))
-	}
 
 	ws := &wasiState{}
 	mod := wasm2go.New(ws, ws)
-	initWASIState(ws, mod, gio, opts)
+	initWASIState(ws, mod, gio, buildModuleConfig(cwd, libFS, binFS, workFS, writableDirs))
 
 	mod.X_initialize()
 
@@ -206,14 +246,13 @@ func initModule(mod *wasm2go.Module, sio *serverIO) error {
 // arguments. When the guest calls proc_exit(0) the captured stdout content is
 // returned; a non-zero exit code produces an error wrapping any stderr output.
 //
-// The caller is responsible for recovering the exitPanic that proc_exit
-// produces. In single-shot paths this function is called directly; in Server
-// mode the eval runs in a background goroutine.
+// proc_exit panics are recovered here as exitPanic (see wasiState.Xproc_exit).
+// The Server path in server.go calls initModule separately and invokes
+// Xzeroperl_eval in a background goroutine with its own recover (bypassing
+// this function) so the interpreter stays alive across multiple commands.
 //
-// Note: this function calls Xzeroperl_init internally, which is fine for the
-// single-shot Command path. The Server path in server.go calls initModule
-// separately and then invokes Xzeroperl_eval directly (bypassing this
-// function) to keep the interpreter alive across multiple commands.
+// Note: this function calls Xzeroperl_init internally, which is appropriate for
+// the single-shot Command path only.
 func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {

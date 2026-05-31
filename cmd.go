@@ -8,17 +8,18 @@ import (
 )
 
 // Command runs a single ExifTool invocation. The caller's working directory is
-// mounted writable at "/" via a WASI host directory preopen, and [os.TempDir] is
-// mounted read-write for ExifTool side effects. stdin is forwarded to ExifTool's
-// standard input; pass nil if no input is required.
+// preopened writable at "/host" (wasihost.WithHostDirectoryPreopen), and
+// [os.TempDir] is preopened the same way for ExifTool side effects. stdin is
+// forwarded to guest fd 0 via guestIO; pass nil if no input is required.
 //
 // It uses [context.Background]; for cancellation see [CommandContext].
 func Command(stdin io.Reader, arg ...string) ([]byte, error) {
 	return CommandContext(context.Background(), stdin, arg...)
 }
 
-// CommandContext is like [Command] but respects context cancellation. If ctx
-// is already done when the call begins, it returns ctx.Err immediately.
+// CommandContext is like [Command] but returns ctx.Err immediately if ctx is already
+// cancelled when the call begins. Once WASM evaluation starts, ctx cancellation is
+// not honored; the guest runs to completion or proc_exit.
 func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []byte, err error) {
 	select {
 	case <-ctx.Done():

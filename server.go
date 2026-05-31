@@ -18,6 +18,18 @@ import (
 // and -execute<boundary> input framing.
 const boundary = "1854673209"
 
+// stayOpenScannerInitBuf is bufio.Scanner's default initial token buffer capacity.
+const stayOpenScannerInitBuf = 64 * 1024
+
+// maxStayOpenStdoutToken is the maximum size of a single stay_open command
+// response scanned from stdout. bufio.Scanner defaults to 64KiB; ExifTool may
+// emit larger payloads before the {ready} framing token.
+const maxStayOpenStdoutToken = 1024 * 1024
+
+// readyFramingToken is the ExifTool -stay_open response delimiter emitted by
+// -echo4 "{ready<boundary>}" and consumed by splitReadyToken.
+var readyFramingToken = []byte("{ready" + boundary + "}")
+
 // processStub adapts Server to the process-like interface expected by the
 // original go-exiftool API. Killing the stub closes the server's stdin pipe.
 type processStub struct {
@@ -43,11 +55,11 @@ type cmdStub struct {
 
 // Server is a persistent, in-process ExifTool instance using the -stay_open
 // protocol. It amortises the one-time Perl/ExifTool startup cost across many
-// [Server.Command] calls. Concurrency safety: Command calls are serialised
-// internally; lifecycle methods (Close, Shutdown) may be called concurrently.
+// [Server.Command] calls. [Server.Command] calls are serialised via cmdMtx.
 //
-// Use [NewServer] to create an instance and call [Server.Shutdown] or
-// [Server.Close] when finished to release resources.
+// Use [NewServer] to create an instance. After it returns, call [Server.Shutdown]
+// for graceful teardown or [Server.Close] to force-stop without waiting. Do not
+// call Shutdown or Close concurrently with an in-flight [Server.Command].
 type Server struct {
 	srvMtx     sync.Mutex
 	cmdMtx     sync.Mutex
@@ -146,7 +158,8 @@ func closeAll(closers ...io.Closer) error {
 // commonArg is prepended to every subsequent [Server.Command] invocation
 // (for example "-fast", "-api", "LargeFileSupport=1").
 // The package-level [Arg1] and [Config] variables are also included.
-// Call [Server.Shutdown] or [Server.Close] when done to release resources.
+// Call [Server.Shutdown] after the server is running for graceful teardown, or
+// [Server.Close] to force-stop without waiting.
 func NewServer(commonArg ...string) (*Server, error) {
 	e := &Server{}
 	e.cmd = &cmdStub{Process: &processStub{server: e}}
@@ -197,8 +210,7 @@ func (e *Server) start() error {
 	e.stdoutR = sio.stdoutR
 	e.sio = sio
 
-	e.stdout = bufio.NewScanner(sio.stdoutR)
-	e.stdout.Split(splitReadyToken)
+	e.stdout = newStayOpenStdoutScanner(sio.stdoutR)
 
 	mem := ws.mem()
 
@@ -277,8 +289,7 @@ func (e *Server) start() error {
 // reading from stdin. Xzeroperl_eval is synchronous native code — it cannot
 // be preempted or interrupted. The eval goroutine will eventually encounter
 // a pipe error on its next I/O attempt and exit, at which point evalDone is
-// closed. Under -count=1 each test gets a fresh process, so orphaned
-// goroutines die with the process.
+// closed.
 func (e *Server) stopForceClose() {
 	if e.stdinW != nil {
 		_, _ = fmt.Fprint(e.stdinW, "-stay_open\nfalse\n")
@@ -439,11 +450,22 @@ func (e *Server) Shutdown() error {
 	return e.finalize()
 }
 
+// newStayOpenStdoutScanner returns a bufio.Scanner that reads stay_open command
+// responses from r, splitting on readyFramingToken. Token capacity is raised to
+// maxStayOpenStdoutToken so large ExifTool stdout is not truncated at the 64KiB
+// bufio.Scanner default.
+func newStayOpenStdoutScanner(r io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, stayOpenScannerInitBuf), maxStayOpenStdoutToken)
+	scanner.Split(splitReadyToken)
+	return scanner
+}
+
 // splitReadyToken is a bufio.SplitFunc that scans until the ExifTool
 // "{ready<boundary>}" response token followed by a newline. The token and
 // newline are consumed but not included in the returned token data.
 func splitReadyToken(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if i := bytes.Index(data, []byte("{ready"+boundary+"}")); i >= 0 {
+	if i := bytes.Index(data, readyFramingToken); i >= 0 {
 		if n := bytes.IndexByte(data[i:], '\n'); n >= 0 {
 			if atEOF && len(data) == (n+i+1) {
 				return n + i + 1, data[:i], bufio.ErrFinalToken

@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/lbe/go-exiftool-wasm/internal/testutil"
 )
 
 // TestLegacyZeroperlImportPathRemoved guards that the wasm2go-generated module
@@ -24,7 +26,7 @@ func TestLegacyZeroperlImportPathRemoved(t *testing.T) {
 		t.Fatalf("lookpath go: %v", err)
 	}
 
-	rootDir := findModuleRoot(t)
+	rootDir := testutil.Root(t)
 	consumerDir := filepath.Join(rootDir, "testdata", "legacyzeroperlconsumer")
 
 	cmd := exec.Command(goBin, "build", ".")
@@ -42,25 +44,5 @@ func TestLegacyZeroperlImportPathRemoved(t *testing.T) {
 		!strings.Contains(combined, "cannot find module") &&
 		!strings.Contains(combined, "missing") {
 		t.Fatalf("unexpected build failure output:\n%s", combined)
-	}
-}
-
-func findModuleRoot(t *testing.T) string {
-	t.Helper()
-
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-
-	for {
-		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("go.mod not found")
-		}
-		dir = parent
 	}
 }

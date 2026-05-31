@@ -6,19 +6,25 @@
 // The Perl stdlib and ExifTool script are embedded as LZ4-compressed files and
 // transparently decompressed on first read via an LRU cache.
 //
-// Mount layout:
-//   - "/": writable host directory preopen (caller's working directory)
-//   - "/lib": read-only FS serving the embedded Perl standard library
+// guest cwd is /host: Perl preamble in exiftoolEvalWrapper chdirs to hostWorkDir
+// before ExifTool runs, so relative paths resolve against the writable host working
+// directory mount rather than guest root /.
+//
+// Mount layout (assembled in buildModuleConfig via wasihost.NewModuleConfig):
+//   - "/host" ([hostWorkDir]): primary writable preopen for the caller's working directory
+//   - host cwd path aliases: additional writable preopens via registerHostDirPreopenAliases
+//   - "/lib": read-only FS (wasihost.WithReadOnlyFS) serving the embedded Perl tree
 //   - "/bin": read-only FS serving the ExifTool script
 //   - "/dev": read-only devNullFS for /dev/null
 //   - [os.TempDir] (and any additional dirs): writable host directory preopens
 //
 // Entry points:
 //   - [Command] / [CommandContext]: one-shot invocation; the caller's working
-//     directory is mounted writable at "/" with [os.TempDir] for side effects.
+//     directory is mounted writable at "/host" with [os.TempDir] for side effects.
 //   - [NewServer]: persistent ExifTool using the -stay_open protocol; amortises
-//     Perl startup across many [Server.Command] calls. Call [Server.Shutdown] or
-//     [Server.Close] when finished.
+//     Perl startup across many [Server.Command] calls. After [NewServer] returns,
+//     call [Server.Shutdown] for graceful teardown. Use [Server.Close] to force-stop
+//     without waiting (for example if Perl is still initializing).
 //
 // Configuration package variables [Arg1] and [Config] are forwarded into the
 // ExifTool argument list for [Command]/[CommandContext] and [NewServer]. [Exec]
@@ -26,10 +32,7 @@
 // empty unless you intend to pass a valid ExifTool option: it is prepended
 // verbatim and a mistaken value can be interpreted as a file argument.
 //
-// The Perl library layout segment (perl5Lib) determines the PERL5LIB path
-// inside the guest (e.g. /lib/5.16.3, /lib/5.16.3/wasm32-wasi). It was
-// formerly defined in perlversion.go; after the migration the layout is
-// fixed within the embedded perl-wasi-prefix tree.
+// See ARCHITECTURE.md for mount layout, I/O model, and stay_open lifecycle details.
 package exiftool
 
 // Exec is retained for compatibility with the original go-exiftool API.

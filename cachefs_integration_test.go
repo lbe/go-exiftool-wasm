@@ -21,7 +21,9 @@ func TestCachedFSIntegration(t *testing.T) {
 		t.Fatalf("fs.Sub failed: %v", err)
 	}
 
-	rawFile, err := subFS.Open("lib/" + perl5Lib + "/Carp.pm")
+	carpPath := findEmbeddedCarpPath(t, subFS)
+
+	rawFile, err := subFS.Open(carpPath)
 	if err != nil {
 		t.Skipf("Carp.pm not found: %v", err)
 	}
@@ -48,7 +50,7 @@ func TestCachedFSIntegration(t *testing.T) {
 	defer cfs.Close()
 
 	// First read - should decompress and cache
-	f1, err := cfs.Open("lib/" + perl5Lib + "/Carp.pm")
+	f1, err := cfs.Open(carpPath)
 	if err != nil {
 		t.Fatalf("First Open failed: %v", err)
 	}
@@ -77,7 +79,7 @@ func TestCachedFSIntegration(t *testing.T) {
 	}
 
 	// Second read - should be a cache hit
-	f2, err := cfs.Open("lib/" + perl5Lib + "/Carp.pm")
+	f2, err := cfs.Open(carpPath)
 	if err != nil {
 		t.Fatalf("Second Open failed: %v", err)
 	}
@@ -100,4 +102,27 @@ func TestCachedFSIntegration(t *testing.T) {
 	if string(data1) != string(data2) {
 		t.Errorf("data mismatch between first and second read")
 	}
+}
+
+func findEmbeddedCarpPath(t *testing.T, fsys fs.FS) string {
+	t.Helper()
+
+	var carpPath string
+	err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Name() == "Carp.pm" {
+			carpPath = path
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk embed tree: %v", err)
+	}
+	if carpPath == "" {
+		t.Skip("Carp.pm not found in embedded perl-wasi-prefix")
+	}
+	return carpPath
 }

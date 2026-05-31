@@ -5,10 +5,10 @@ import (
 	"io"
 )
 
-// guestIO abstracts stdin, stdout, and stderr for the Perl guest. The WASI
-// host layer calls these methods instead of using real file descriptors so
-// that different execution modes (single-shot vs. server stay_open) can plug
-// in their own I/O backends.
+// guestIO abstracts guest stdio for the wasm2go-wasi-host layer. initWASIState
+// wires these methods into wasihost.ModuleConfig via WithStdin, WithStdout, and
+// WithStderr so single-shot Command and Server stay_open modes can use different
+// backends (in-memory buffers vs os.Pipe).
 type guestIO interface {
 	ReadStdin(buf []byte) (int, error)
 	WriteStdout(buf []byte) (int, error)

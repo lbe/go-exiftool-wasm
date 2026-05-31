@@ -25,23 +25,6 @@ linters:
       - linters:
           - bodyclose
         path: .*_test.go
-      - linters:
-          - bodyclose
-        path: router/timeout_response.go
-      # False positives on CGO generated code
-      - linters:
-          - staticcheck
-        path: vips/.*
-        text: "SA4000:"
-      # False positives on CGO generated code
-      - linters:
-          - gocritic
-        path: vips/.*
-        text: dupSubExpr
-      # False positives on CGO generated code
-      - linters:
-          - staticcheck
-        text: "ST1005:"
     paths:
       - .tmp
       - vendor

@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/lbe/go-exiftool-wasm.svg)](https://pkg.go.dev/github.com/lbe/go-exiftool-wasm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go Version](https://img.shields.io/badge/Go-1.26.0-blue.svg)](https://go.dev/dl/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-blue.svg)](https://go.dev/dl/)
 [![Go Report Card](https://goreportcard.com/badge/github.com/lbe/go-exiftool-wasm)](https://goreportcard.com/report/github.com/lbe/go-exiftool-wasm)
 [![Release](https://img.shields.io/github/v/release/lbe/go-exiftool-wasm)](https://github.com/lbe/go-exiftool-wasm/releases)
 [![CI](https://github.com/lbe/go-exiftool-wasm/actions/workflows/go.yml/badge.svg)](https://github.com/lbe/go-exiftool-wasm/actions/workflows/go.yml)
@@ -23,10 +23,12 @@ Upstream ExifTool (Phil Harvey) and metadata: [exiftool.org](https://exiftool.or
   The stdlib is stored LZ4-compressed; [`perlFS()`](exiftool.go) transparently decompresses files on
   first read using a 2000-entry LRU cache
   ([`lbe/cfsread`](https://pkg.go.dev/github.com/lbe/cfsread)).
-- **WASI host** - the external
-  [`github.com/lbe/wasm2go-wasi-host`](https://github.com/lbe/wasm2go-wasi-host) package provides
-  the WASI implementation, replacing the former internal `wasi-wasm2go` module. Mounts use
-  separate read-only FS mounts (`/lib`, `/bin`) and writable host directory preopens (`/`).
+- **WASI host** - [`github.com/lbe/wasm2go-wasi-host`](https://github.com/lbe/wasm2go-wasi-host)
+  implements WASI snapshot-preview1 for the wasm2go module. Mounts and syscalls are configured through
+  `wasihost.NewModuleConfig()` in `buildModuleConfig`: writable host directory preopen at `/host` for
+  the caller's working directory (guest cwd `/host` via Perl preamble `chdir`); read-only FS mounts at
+  `/lib` and `/bin`; host cwd path aliases for host-absolute file arguments; and `os.TempDir()` as an
+  additional writable preopen.
 - **Same behavior everywhere** - one toolchain-based interpreter implementation on Linux, macOS,
   Windows, etc.
 - **Trade-off** - cold start is heavy (on the order of **~7-10 seconds** to initialize the
@@ -41,14 +43,13 @@ Upstream ExifTool (Phil Harvey) and metadata: [exiftool.org](https://exiftool.or
 ## Usage
 
 ```go
-// One-shot: paths are relative to the process working directory (host cwd is
-// mounted writable at "/" via wasi host directory preopen).
+// One-shot: paths are relative to the process working directory; guest cwd is /host.
 out, err := exiftool.Command(nil, "-json", "photo.jpg")
 
 // Batch: one Perl startup, many commands.
 e, err := exiftool.NewServer("-fast")
 if err != nil { /* ... */ }
-defer e.Shutdown()
+defer e.Shutdown() // graceful; safe after NewServer returns. Use Close if stopping during init.
 out, err = e.Command("-Artist", "photo.jpg")
 ```
 
@@ -59,9 +60,19 @@ Package docs, API details, and filesystem semantics (mount layout, temp dir, `Ar
 
 ### Tests
 
+See [TESTING.md](TESTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Fast local check (unit only):
+
 ```bash
-go test ./... -timeout 10m   # allow several minutes for interpreter-heavy paths
+go test ./... -count=1
 ```
+
+Full suite matches CI:
+
+```bash
+go test -tags=integration,e2e -race ./... -count=1
+```
+
+Or: `make test-race ARGS="-count=1"`. Lint: `make lint`.
 
 ### Refreshing `embed/` from zeroperl
 
@@ -85,9 +96,9 @@ with `cfsread-lz4`. This updates the LZ4-compressed files in place so the embedd
 the new Perl build.
 
 zeroperl's README also documents **build arguments** (`PERL_VERSION`, `EXIFTOOL_VERSION`,
-`BUILD_EXIFTOOL`, memory/stack, etc.). The Perl library layout segment determines the
-`PERL5LIB` path inside the guest (e.g. `/lib/5.16.3`, `/lib/5.16.3/wasm32-wasi`).
-After the migration this layout is fixed within the embedded `perl-wasi-prefix` tree.
+`BUILD_EXIFTOOL`, memory/stack, etc.). The embedded prefix layout (for example `lib/perl5` and
+`lib/perl5/wasm32-wasi`) is fixed for a given embed refresh; `exiftoolEvalWrapper` prepends those
+paths to `@INC` at eval time.
 
 ### Building ExifTool prefix with `dist.pl`
 
@@ -105,9 +116,11 @@ Version resolution precedence is:
 
 ## Writing Files
 
-`Command` and `CommandContext` run ExifTool in the **caller's working directory**, which is mounted
-writable inside the WASM sandbox. ExifTool can therefore write (or overwrite) files in the working
-directory using flags like `-overwrite_original` or `-o <outfile>`.
+`Command` and `CommandContext` run ExifTool with file paths relative to the process working
+directory. The host cwd is preopened at `/host` via `wasihost.WithHostDirectoryPreopen`; guest cwd is
+`/host` (Perl preamble `chdir`). `os.TempDir()` is also preopened for ExifTool side effects. ExifTool
+can write (or overwrite) files in the working directory using flags like `-overwrite_original` or
+`-o <outfile>`.
 
 ## License
 

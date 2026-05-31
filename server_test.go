@@ -1,3 +1,5 @@
+//go:build e2e
+
 package exiftool
 
 import (
@@ -6,13 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
 
 func TestServer(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -54,8 +55,6 @@ func TestServer(t *testing.T) {
 }
 
 func TestServerReadTags(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -91,8 +90,6 @@ func TestServerReadTags(t *testing.T) {
 }
 
 func TestServerReadAllTags(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -123,8 +120,6 @@ func TestServerReadAllTags(t *testing.T) {
 }
 
 func TestServerGPSTags(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -157,8 +152,6 @@ func TestServerGPSTags(t *testing.T) {
 }
 
 func TestServerMultipleCommands(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -182,8 +175,6 @@ func TestServerMultipleCommands(t *testing.T) {
 }
 
 func TestServerMultipleFiles(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -208,8 +199,6 @@ func TestServerMultipleFiles(t *testing.T) {
 }
 
 func TestServerNonexistentFile(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -228,8 +217,6 @@ func TestServerNonexistentFile(t *testing.T) {
 }
 
 func TestServerShortFormat(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -256,8 +243,6 @@ func TestServerShortFormat(t *testing.T) {
 }
 
 func TestServerWriteTag(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	src, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -302,8 +287,6 @@ func TestServerWriteTag(t *testing.T) {
 }
 
 func TestServerDeleteTag(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	src, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -348,8 +331,6 @@ func TestServerDeleteTag(t *testing.T) {
 }
 
 func TestServerCopyTags(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	src, err := os.ReadFile("testdata/sample_noexif.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -397,8 +378,6 @@ func TestServerCopyTags(t *testing.T) {
 }
 
 func TestServerJSONOutput(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -441,9 +420,10 @@ func TestServerClose(t *testing.T) {
 	}
 }
 
+// TestServerConcurrentCommands issues concurrent Command calls on one stay_open
+// server. Command holds cmdMtx for the full call, so goroutines serialize; the
+// test still exercises server lifecycle and pipe I/O under -race.
 func TestServerConcurrentCommands(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -480,9 +460,9 @@ func TestServerConcurrentCommands(t *testing.T) {
 	}
 }
 
+// TestServerConcurrentReads issues concurrent file reads on one stay_open server.
+// Command serializes via cmdMtx; concurrent goroutines still stress server I/O paths.
 func TestServerConcurrentReads(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -494,7 +474,7 @@ func TestServerConcurrentReads(t *testing.T) {
 	}()
 
 	var wg sync.WaitGroup
-	errors := make(chan error, 5)
+	errs := make(chan error, 5)
 
 	files := []string{
 		"testdata/sample.jpg",
@@ -510,15 +490,15 @@ func TestServerConcurrentReads(t *testing.T) {
 			defer wg.Done()
 			_, err := e.Command("-FileType", file)
 			if err != nil {
-				errors <- err
+				errs <- err
 			}
 		}(f)
 	}
 
 	wg.Wait()
-	close(errors)
+	close(errs)
 
-	for err := range errors {
+	for err := range errs {
 		if err != nil {
 			t.Error(err)
 		}
@@ -526,8 +506,6 @@ func TestServerConcurrentReads(t *testing.T) {
 }
 
 func TestServerCommonArgs(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	// Create server with common args
 	e, err := NewServer("-fast")
 	if err != nil {
@@ -555,8 +533,6 @@ func TestServerCommonArgs(t *testing.T) {
 }
 
 func TestServerPNG(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -583,8 +559,6 @@ func TestServerPNG(t *testing.T) {
 }
 
 func TestServerTIFF(t *testing.T) {
-	skipSlowRaceTest(t)
-
 	e, err := NewServer()
 	if err != nil {
 		t.Fatal(err)
@@ -607,5 +581,91 @@ func TestServerTIFF(t *testing.T) {
 
 	if got, want := string(m["Artist"]), "TIFF Artist"; got != want {
 		t.Errorf("Artist: got %q, want %q", got, want)
+	}
+}
+
+func TestServerWithConfig(t *testing.T) {
+	savedExec, savedArg1, savedConfig := Exec, Arg1, Config
+	defer func() { Exec, Arg1, Config = savedExec, savedArg1, savedConfig }()
+
+	Config = "/nonexistent/config/file.cfg"
+	e, err := NewServer()
+	if err != nil {
+		t.Logf("NewServer with bad config (acceptable): %v", err)
+		return
+	}
+	if err := e.Shutdown(); err != nil {
+		t.Logf("Shutdown error (acceptable): %v", err)
+	}
+}
+
+func TestServerRestart(t *testing.T) {
+	e, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	e.restart()
+
+	if !e.done {
+		t.Error("expected server to still be done after restart")
+	}
+}
+
+func TestServerCommandAfterKill(t *testing.T) {
+	e, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := e.Command("-ver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Before kill: %s", bytes.TrimSpace(out))
+
+	if killErr := e.cmd.Process.Kill(); killErr != nil {
+		t.Logf("Kill error: %v", killErr)
+	}
+	if releaseErr := e.cmd.Process.Release(); releaseErr != nil {
+		t.Logf("Release error: %v", releaseErr)
+	}
+
+	_, err = e.Command("-ver")
+	if err != nil {
+		t.Logf("Command after kill (expected error): %v", err)
+	}
+
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestServerStayOpenLargeStdoutThroughPipe verifies stay_open Command responses
+// larger than bufio.Scanner's default 64KiB token limit are delivered intact.
+func TestServerStayOpenLargeStdoutThroughPipe(t *testing.T) {
+	e, err := NewServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if shutdownErr := e.Shutdown(); shutdownErr != nil {
+			t.Logf("Shutdown error: %v", shutdownErr)
+		}
+	}()
+
+	const payloadLen = 70000
+	payload := strings.Repeat("A", payloadLen)
+
+	out, err := e.Command("-echo3", payload)
+	if err != nil {
+		t.Fatalf("large stdout through stay_open pipe: %v", err)
+	}
+	if !bytes.Contains(out, []byte(payload)) {
+		t.Fatalf("response missing %d-byte payload; got %d bytes", payloadLen, len(out))
 	}
 }
