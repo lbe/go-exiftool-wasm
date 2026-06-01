@@ -5,6 +5,7 @@ package exiftool
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -345,6 +346,31 @@ func TestCommandJSONOutput(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte(`"Test Artist"`)) {
 		t.Error("expected JSON with Test Artist value")
+	}
+}
+
+func TestCommandZeroByteFileJSON(t *testing.T) {
+	out, err := Command(nil, "-json", "testdata/empty.jpg")
+	if len(out) == 0 {
+		t.Fatal("expected JSON on stdout for zero-byte file, got empty output")
+	}
+
+	var records []map[string]any
+	if err := json.Unmarshal(out, &records); err != nil {
+		t.Fatalf("invalid JSON: %v\nraw: %s", err, out)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	errVal, ok := records[0]["Error"]
+	if !ok {
+		t.Fatalf("expected Error field in JSON, got keys: %v", records[0])
+	}
+	if got := errVal.(string); got != "File is empty" {
+		t.Errorf("Error: got %q, want %q", got, "File is empty")
+	}
+	if err == nil {
+		t.Log("Command returned nil error (stay_open path); native exiftool exits 1")
 	}
 }
 

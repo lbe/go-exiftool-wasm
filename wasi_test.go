@@ -241,3 +241,16 @@ func assertArtistCopyright(t *testing.T, out []byte, err error) {
 		t.Errorf("Copyright: got %q, want %q", got, want)
 	}
 }
+
+func TestEvalPerlStdoutOnNonZeroExit(t *testing.T) {
+	out, err := evalTestPerl("print \"payload\\n\"; exit 1;")
+	if len(out) == 0 || !strings.Contains(string(out), "payload") {
+		t.Fatalf("expected stdout payload on non-zero exit, got out=%q err=%v", out, err)
+	}
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "exit") {
+		t.Errorf("error = %v, want exit-related message", err)
+	}
+}

@@ -264,11 +264,15 @@ func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []by
 					return
 				}
 				if ep.code != 0 {
+					result = guestStdoutOnExit(ws.guestIO)
 					stderrStr := ""
 					if dio, ok := ws.guestIO.(*directIO); ok {
 						stderrStr = dio.StderrB.String()
 					}
-					err = fmt.Errorf("exiftool exited with code %d\nstderr: %s", ep.code, stderrStr)
+					err = &ExitError{
+						Code: int(ep.code),
+						Msg:  fmt.Sprintf("exiftool exited with code %d\nstderr: %s", ep.code, stderrStr),
+					}
 				}
 			} else {
 				panic(r)

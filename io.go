@@ -47,3 +47,13 @@ func (d *directIO) CloseStdin() {}
 
 // CloseAll is a no-op; directIO buffers are in-memory and need no cleanup.
 func (d *directIO) CloseAll() {}
+
+// guestStdoutOnExit copies captured stdout from guestIO when the guest calls
+// proc_exit with a non-zero code.
+func guestStdoutOnExit(gio guestIO) []byte {
+	dio, ok := gio.(*directIO)
+	if !ok {
+		return nil
+	}
+	return append([]byte(nil), dio.StdoutB.Bytes()...)
+}

@@ -33,8 +33,15 @@ func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 					}
 					return
 				}
-				dio := ws.guestIO.(*directIO)
-				err = fmt.Errorf("perl exit %d\nstderr: %s", ep.code, dio.StderrB.String())
+				stdout = guestStdoutOnExit(ws.guestIO)
+				stderrStr := ""
+				if dio, ok := ws.guestIO.(*directIO); ok {
+					stderrStr = dio.StderrB.String()
+				}
+				err = &ExitError{
+					Code: int(ep.code),
+					Msg:  fmt.Sprintf("perl exit %d\nstderr: %s", ep.code, stderrStr),
+				}
 			} else {
 				panic(r)
 			}

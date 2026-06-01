@@ -1,6 +1,7 @@
 package exiftool
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -282,5 +283,30 @@ func TestExitPanicError(t *testing.T) {
 	}
 	if got, want := (exitPanic{code: 1}).Error(), "proc_exit"; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestJSONRecordsExitCode(t *testing.T) {
+	t.Parallel()
+
+	out, _ := json.Marshal([]map[string]any{
+		{"FileName": "x.jpg", "Error": "File is empty"},
+	})
+	if got := jsonRecordsExitCode(out, []string{"-json", "x.jpg"}); got != 1 {
+		t.Errorf("jsonRecordsExitCode = %d, want 1", got)
+	}
+	if got := jsonRecordsExitCode(out, []string{"-ver"}); got != 0 {
+		t.Errorf("without -json: got %d, want 0", got)
+	}
+}
+
+func TestUsesEvalModulePath(t *testing.T) {
+	t.Parallel()
+
+	if !usesEvalModulePath(strings.NewReader("-ver\n"), []string{"-@", "-"}) {
+		t.Error("expected true for -@ - with stdin")
+	}
+	if usesEvalModulePath(nil, []string{"-json", "file.jpg"}) {
+		t.Error("expected false for normal args")
 	}
 }
