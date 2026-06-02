@@ -118,6 +118,14 @@ func perlFS() fs.FS {
 // package-level [Arg1] and [Config] variables and appending a UTF-8 charset
 // flag, followed by the caller-supplied args.
 func commandArgs(arg []string) []string {
+	args := packageArgs()
+	args = append(args, "-charset", "filename=utf8")
+	args = append(args, arg...)
+	return args
+}
+
+// packageArgs returns argv prefix from package-level [Arg1] and [Config].
+func packageArgs() []string {
 	var args []string
 	if Arg1 != "" {
 		args = append(args, Arg1)
@@ -125,8 +133,6 @@ func commandArgs(arg []string) []string {
 	if Config != "" {
 		args = append(args, "-config", Config)
 	}
-	args = append(args, "-charset", "filename=utf8")
-	args = append(args, arg...)
 	return args
 }
 
@@ -160,7 +166,7 @@ func registerHostDirPreopenAliases(moduleCfg *wasihost.ModuleConfig, hostDir str
 //   - /lib, /bin: read-only FS mounts (wasihost.WithReadOnlyFS) over embedded Perl tree
 //   - /dev: synthetic /dev/null (read-only FS)
 //   - /work: optional read-only workFS
-//   - host cwd aliases and writableDirs: extra writable preopens via registerHostDirPreopenAliases
+//   - host cwd aliases, os.TempDir, and operand dirs: writable preopens via registerHostDirPreopenAliases
 //
 // Also enables wall/nano clocks, nanosleep, and crypto/rand for WASI syscalls.
 func buildModuleConfig(cwd string, libFS, binFS fs.FS, workFS fs.FS, writableDirs []string) *wasihost.ModuleConfig {
@@ -184,17 +190,20 @@ func buildModuleConfig(cwd string, libFS, binFS fs.FS, workFS fs.FS, writableDir
 	return moduleCfg
 }
 
-// newModule creates a zeroperl wasm2go module and wires wasihost.State through
-// [initWASIState]. Filesystem mounts come from [buildModuleConfig]; stdio from
-// guestIO. Calls X_initialize on the module but does not evaluate any Perl script.
-//
-// Each module gets its own wasihost.State (not safe for concurrent use across
-// goroutines, per wasm2go-wasi-host).
+// newModule creates a zeroperl module using the process working directory for
+// the /host preopen. Prefer [newModuleAt] when cwd is already known.
 func newModule(gio guestIO, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, nil, fmt.Errorf("exiftool: getwd: %w", err)
 	}
+	return newModuleAt(gio, cwd, workFS, writableDirs)
+}
+
+// newModuleAt is like [newModule] but uses the supplied cwd for the /host
+// preopen so it matches operand resolution in [commandEvalModule].
+func newModuleAt(gio guestIO, cwd string, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
+	cwd = filepath.Clean(cwd)
 	libFS, err := fs.Sub(perlFS(), "lib")
 	if err != nil {
 		return nil, nil, fmt.Errorf("exiftool: sub lib: %w", err)

@@ -167,7 +167,9 @@ unlink($file);
 	}
 }
 
-func TestCommandAbsolutePathOutsideCwd(t *testing.T) {
+// TestCommandAbsolutePathUnderTemp verifies that absolute paths under os.TempDir()
+// work via the temp directory preopen (not operand preopen).
+func TestCommandAbsolutePathUnderTemp(t *testing.T) {
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "sample.jpg")
 
@@ -179,17 +181,54 @@ func TestCommandAbsolutePathOutsideCwd(t *testing.T) {
 		t.Fatalf("write fixture copy: %v", err)
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cwdReal, _ := filepath.EvalSymlinks(cwd)
-	dstReal, _ := filepath.EvalSymlinks(dst)
-	if strings.HasPrefix(dstReal, cwdReal+string(filepath.Separator)) {
-		t.Skipf("t.TempDir() %q is under cwd %q; not-under-cwd case cannot be verified", dst, cwd)
-	}
-
 	out, err := Command(nil, "-Artist", "-Copyright", dst)
+	assertArtistCopyright(t, out, err)
+}
+
+func TestCommandAbsolutePathOutsideCwdAndTemp(t *testing.T) {
+	root := testutil.Root(t)
+	chdirTo(t, filepath.Join(root, "testdata", "dotdot", "work"))
+	outside := filepath.Join(root, "testdata", "dotdot", "outside", "sample.jpg")
+
+	out, err := Command(nil, "-Artist", "-Copyright", outside)
+	assertArtistCopyright(t, out, err)
+}
+
+func TestCommandJSONAbsolutePathOutsideCwdAndTemp(t *testing.T) {
+	root := testutil.Root(t)
+	chdirTo(t, filepath.Join(root, "testdata", "dotdot", "work"))
+	outside := filepath.Join(root, "testdata", "dotdot", "outside", "empty.jpg")
+
+	out, err := Command(nil, "-json", outside)
+	assertJSONFileEmptyError(t, out, err)
+	assertJSONSourceFileAbsolute(t, out, outside)
+}
+
+func TestCommandAbsolutePathMixedRelativeAndAbsolute(t *testing.T) {
+	root := testutil.Root(t)
+	chdirTo(t, filepath.Join(root, "testdata", "dotdot", "work"))
+	outside := filepath.Join(root, "testdata", "dotdot", "outside", "sample.jpg")
+	rel := "../outside/sample.jpg"
+
+	out, err := Command(nil, "-Artist", "-Copyright", rel, outside)
+	if err != nil {
+		t.Fatalf("Command with mixed relative and absolute paths: %v", err)
+	}
+	body := string(out)
+	if !strings.Contains(body, "Test Artist") || !strings.Contains(body, "Test Copyright 2024") {
+		t.Fatalf("expected tags from both operands, got:\n%s", body)
+	}
+}
+
+func TestCommandJSONRelativePathOutsideHostViaDotDot(t *testing.T) {
+	chdirTo(t, filepath.Join(testutil.Root(t), "testdata", "dotdot", "work"))
+	out, err := Command(nil, "-json", "../outside/empty.jpg")
+	assertJSONFileEmptyError(t, out, err)
+}
+
+func TestCommandRelativePathOutsideHostViaDotDot(t *testing.T) {
+	chdirTo(t, filepath.Join(testutil.Root(t), "testdata", "dotdot", "work"))
+	out, err := Command(nil, "-Artist", "-Copyright", "../outside/sample.jpg")
 	assertArtistCopyright(t, out, err)
 }
 

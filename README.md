@@ -27,8 +27,8 @@ Upstream ExifTool (Phil Harvey) and metadata: [exiftool.org](https://exiftool.or
   implements WASI snapshot-preview1 for the wasm2go module. Mounts and syscalls are configured through
   `wasihost.NewModuleConfig()` in `buildModuleConfig`: writable host directory preopen at `/host` for
   the caller's working directory (guest cwd `/host` via Perl preamble `chdir`); read-only FS mounts at
-  `/lib` and `/bin`; host cwd path aliases for host-absolute file arguments; and `os.TempDir()` as an
-  additional writable preopen.
+  `/lib` and `/bin`; host cwd path aliases; `os.TempDir()`; and operand parent directories outside
+  cwd/temp for [Command] (see [operand_preopen.go](operand_preopen.go)).
 - **Same behavior everywhere** - one toolchain-based interpreter implementation on Linux, macOS,
   Windows, etc.
 - **Trade-off** - cold start is heavy (on the order of **~7-10 seconds** to initialize the
@@ -117,10 +117,10 @@ Version resolution precedence is:
 ## Writing Files
 
 `Command` and `CommandContext` run ExifTool with file paths relative to the process working
-directory. The host cwd is preopened at `/host` via `wasihost.WithHostDirectoryPreopen`; guest cwd is
-`/host` (Perl preamble `chdir`). `os.TempDir()` is also preopened for ExifTool side effects. ExifTool
-can write (or overwrite) files in the working directory using flags like `-overwrite_original` or
-`-o <outfile>`.
+directory (or host-absolute paths). The host cwd is preopened at `/host`; guest cwd is `/host`.
+`os.TempDir()` and operand parent directories outside cwd/temp are preopened for [Command].
+File operands are passed to ExifTool as host-absolute paths. ExifTool can write (or overwrite)
+files in the working directory using flags like `-overwrite_original` or `-o <outfile>`.
 
 ## License
 

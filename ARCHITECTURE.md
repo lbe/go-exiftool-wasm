@@ -92,8 +92,10 @@ Each zeroperl module instance has its own `wasihost.State` (not concurrent-safe 
 - `/bin` is a **read-only FS** (`moduleCfg.WithReadOnlyFS("/bin", fs.Sub(perlFS(), "bin"))`) serving
   the ExifTool script at `/bin/exiftool`.
 - `/dev` is a read-only FS backed by `devNullFS`.
-- **`os.TempDir()` and additional writable directories** passed as `writableDirs` are preopened via
-  `registerHostDirPreopenAliases`.
+- **`os.TempDir()` and operand parent directories** from [commandWritableDirs] are preopened via
+  `registerHostDirPreopenAliases` as **writable** host mounts. Command rewrites file operands (and
+  path-valued flags such as `-config`) to host-absolute paths. Operand preopens widen writable host
+  access to parent directories of those paths; callers should not pass unintended paths as operands.
 - An optional `/work` read-only FS can be supplied.
 
 Separate preopens for `/host`, `/lib`, and `/bin` keep embedded assets and the writable working
@@ -115,9 +117,10 @@ Internal **guestIO** abstracts stdin/stdout/stderr for both execution modes:
 
 Single-shot (**Command** / **CommandContext**):
 
-1. `newModule`: `wasm2go.New(wasiState, wasiState)`, `initWASIState` + `buildModuleConfig`, `X_initialize`.
-2. `evalModule`: `Xzeroperl_init`, load script/argv in guest memory, `Xzeroperl_eval`.
-3. Recover `exitPanic` from `proc_exit`; exit code 0 returns stdout.
+1. Resolve cwd; build writable preopens via [commandWritableDirs] (temp + [operandPreopenDirs]).
+2. `newModule`: `wasm2go.New(wasiState, wasiState)`, `initWASIState` + `buildModuleConfig`, `X_initialize`.
+3. Rewrite file operands to host-absolute paths ([absolutizeOperands]), then `evalModule`.
+4. Recover `exitPanic` from `proc_exit`; exit code 0 returns stdout; -json per-file Error yields [ExitError] code 1.
 
 Server stay_open:
 
@@ -139,16 +142,17 @@ Server stay_open:
 
 ## Relevant files
 
-| File        | Responsibility                                                 |
-| ----------- | -------------------------------------------------------------- |
-| init.go     | package documentation, compatibility vars (Exec, Arg1, Config) |
-| exiftool.go | module setup, buildModuleConfig, eval path                     |
-| wasi.go     | wasiState wrapper overriding Xproc_exit                        |
-| io.go       | guestIO implementations                                        |
-| cmd.go      | Command and CommandContext                                     |
-| server.go   | stay_open server process model                                 |
-| decode.go   | Unmarshal helper for line-oriented ExifTool text output         |
-| cachefs.go  | internal cachedFS wrapper, cfsread integration                 |
+| File               | Responsibility                                                 |
+| ------------------ | -------------------------------------------------------------- |
+| init.go            | package documentation, compatibility vars (Exec, Arg1, Config) |
+| exiftool.go        | module setup, buildModuleConfig, eval path                     |
+| operand_preopen.go | operand path resolution and Command writable preopen dirs    |
+| wasi.go            | wasiState wrapper overriding Xproc_exit                        |
+| io.go              | guestIO implementations                                        |
+| cmd.go             | Command and CommandContext                                     |
+| server.go          | stay_open server process model                                 |
+| decode.go          | Unmarshal helper for line-oriented ExifTool text output        |
+| cachefs.go         | internal cachedFS wrapper, cfsread integration                 |
 
 ## Related references
 

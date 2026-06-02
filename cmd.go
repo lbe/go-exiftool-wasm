@@ -24,10 +24,12 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("exiftool exited with code %d", e.Code)
 }
 
-// Command runs a single ExifTool invocation. The caller's working directory is
-// preopened writable at "/host" (wasihost.WithHostDirectoryPreopen), and
-// [os.TempDir] is preopened the same way for ExifTool side effects. stdin is
-// forwarded to guest fd 0 via guestIO; pass nil if no input is required.
+// Command runs a single ExifTool invocation via a one-shot eval module. The
+// caller's working directory is preopened writable at "/host"; [os.TempDir] and
+// parent directories of file operands outside cwd/temp are preopened via
+// [commandWritableDirs] (writable mounts; see package docs). File operands are
+// rewritten to host-absolute paths before ExifTool runs. stdin is forwarded to
+// guest fd 0; pass nil if unused.
 //
 // It uses [context.Background]; for cancellation see [CommandContext].
 func Command(stdin io.Reader, arg ...string) ([]byte, error) {
@@ -44,15 +46,12 @@ func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []
 	default:
 	}
 
-	if usesEvalModulePath(stdin, arg) || !hasJSONFlag(arg) {
-		return commandEvalModule(stdin, arg...)
-	}
-	return commandStayOpen(arg...)
+	return commandEvalModule(stdin, arg...)
 }
 
 // usesEvalModulePath reports whether args use -@ - to read ExifTool arguments from
-// stdin. That path must use a single-shot eval with direct stdio instead of the
-// stay_open protocol (whose startup also uses -@ - for command framing).
+// stdin. [Command] always evaluates the module once with direct stdio; this helper
+// identifies the -@ - argv pattern used by tests and stay_open startup framing.
 func usesEvalModulePath(stdin io.Reader, arg []string) bool {
 	for i := 0; i < len(arg); i++ {
 		if arg[i] != "-@" {
@@ -67,34 +66,25 @@ func usesEvalModulePath(stdin io.Reader, arg []string) bool {
 
 func commandEvalModule(stdin io.Reader, arg ...string) ([]byte, error) {
 	guestIO := newDirectIO(stdin)
-	mod, ws, err := newModule(guestIO, nil, []string{os.TempDir()})
+	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	args := commandArgs(arg)
-	out, err := evalModule(mod, ws, args...)
+	writableDirs, argv := prepareCommandEval(cwd, arg)
+	mod, ws, err := newModuleAt(guestIO, cwd, nil, writableDirs)
 	if err != nil {
+		return nil, err
+	}
+	out, err := evalModule(mod, ws, argv...)
+	if err != nil {
+		if out, finishErr := finishCommandResult(out, arg); finishErr != nil {
+			return out, finishErr
+		}
 		return out, err
 	}
 
 	if dio, ok := ws.guestIO.(*directIO); ok && dio.StderrB.Len() > 0 {
 		return out, errors.New("exiftool: " + dio.StderrB.String())
-	}
-	return finishCommandResult(out, arg)
-}
-
-func commandStayOpen(arg ...string) ([]byte, error) {
-	s, err := NewServer()
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = s.Close()
-	}()
-
-	out, err := s.Command(arg...)
-	if err != nil {
-		return out, err
 	}
 	return finishCommandResult(out, arg)
 }

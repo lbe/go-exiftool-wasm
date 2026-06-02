@@ -16,11 +16,14 @@
 //   - "/lib": read-only FS (wasihost.WithReadOnlyFS) serving the embedded Perl tree
 //   - "/bin": read-only FS serving the ExifTool script
 //   - "/dev": read-only devNullFS for /dev/null
-//   - [os.TempDir] (and any additional dirs): writable host directory preopens
+//   - [os.TempDir]: writable preopen for ExifTool side effects
+//   - operand parent directories: writable preopens from [operandPreopenDirs] for file
+//     operands outside cwd and os.TempDir (Command only; see [commandWritableDirs]).
+//     Operand preopens are writable host mounts; only pass paths you intend ExifTool to access.
 //
 // Entry points:
-//   - [Command] / [CommandContext]: one-shot invocation; the caller's working
-//     directory is mounted writable at "/host" with [os.TempDir] for side effects.
+//   - [Command] / [CommandContext]: one-shot eval invocation; operand paths outside
+//     cwd/temp are preopened and rewritten to host-absolute paths before ExifTool runs.
 //   - [NewServer]: persistent ExifTool using the -stay_open protocol; amortises
 //     Perl startup across many [Server.Command] calls. After [NewServer] returns,
 //     call [Server.Shutdown] for graceful teardown. Use [Server.Close] to force-stop

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
 	wasm2go "github.com/lbe/go-exiftool-wasm/internal/zeroperl"
@@ -64,9 +65,12 @@ type Server struct {
 	srvMtx     sync.Mutex
 	cmdMtx     sync.Mutex
 	args       []string
+	cwd        string
 	done       bool
 	cmd        *cmdStub
 	restartErr error
+	// operandPreopens: writable host dirs outside cwd/temp registered for this server.
+	operandPreopens []string
 
 	mod      *wasm2go.Module
 	wasi     *wasiState
@@ -198,7 +202,17 @@ func (e *Server) start() error {
 		return fmt.Errorf("failed to create pipes: %w", err)
 	}
 
-	mod, ws, err := newModule(sio, nil, []string{os.TempDir()})
+	if e.cwd == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			_ = closeAll(sio.stdinR, sio.stdinW, sio.stdoutR, sio.stdoutW)
+			return fmt.Errorf("exiftool: getwd: %w", err)
+		}
+		e.cwd = cwd
+	}
+
+	writable := serverWritableDirs(e.cwd, e.operandPreopens)
+	mod, ws, err := newModuleAt(sio, e.cwd, nil, writable)
 	if err != nil {
 		_ = closeAll(sio.stdinR, sio.stdinW, sio.stdoutR, sio.stdoutW)
 		return fmt.Errorf("failed to create module: %w", err)
@@ -341,7 +355,14 @@ func (e *Server) Command(arg ...string) ([]byte, error) {
 	stderrBefore := e.sio.stderrB.Len()
 	e.sio.stderrMu.Unlock()
 
-	for _, a := range arg {
+	scanArgs := append(append([]string{}, packageArgs()...), arg...)
+	writableDirs := commandWritableDirs(e.cwd, scanArgs)
+	if err := e.ensureOperandPreopens(writableDirs); err != nil {
+		return nil, err
+	}
+	argv := guestOperandPaths(e.cwd, arg)
+
+	for _, a := range argv {
 		if _, err := fmt.Fprintf(e.stdinW, "%s\n", a); err != nil {
 			e.restart()
 			return nil, err
@@ -478,4 +499,38 @@ func splitReadyToken(data []byte, atEOF bool) (advance int, token []byte, err er
 		return 0, data, io.EOF
 	}
 	return 0, nil, nil
+}
+
+func serverWritableDirs(cwd string, operandPreopens []string) []string {
+	return append([]string{os.TempDir()}, operandPreopens...)
+}
+
+func neededOperandPreopens(cwd string, writableDirs []string) []string {
+	tempDir := filepath.Clean(os.TempDir())
+	var out []string
+	for _, d := range writableDirs {
+		d = filepath.Clean(d)
+		if d == tempDir || pathWithinDir(d, cwd) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+func (e *Server) ensureOperandPreopens(writableDirs []string) error {
+	need := neededOperandPreopens(e.cwd, writableDirs)
+	if len(need) == 0 {
+		return nil
+	}
+	merged, changed := mergePreopenDirLists(e.operandPreopens, need)
+	if !changed {
+		return nil
+	}
+	e.operandPreopens = merged
+	e.restart()
+	if e.restartErr != nil {
+		return fmt.Errorf("exiftool: remount operand dirs: %w", e.restartErr)
+	}
+	return nil
 }
