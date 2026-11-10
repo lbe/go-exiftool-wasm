@@ -26,9 +26,6 @@ func operandPreopenDirs(cwd string, arg []string) []string {
 		if dir == "" || dir == string(filepath.Separator) {
 			return
 		}
-		if real, err := filepath.EvalSymlinks(dir); err == nil {
-			dir = real
-		}
 		if pathWithinDir(dir, cwd) || pathWithinDir(dir, tempDir) {
 			return
 		}
@@ -157,7 +154,7 @@ func exiftoolFlagTakesNextArg(flag string) bool {
 	switch flag {
 	case "-ext", "-ext2", "-ext3", "-config", "-o", "-out",
 		"-TagsFromFile", "-tagsFromFile", "-@", "-common_args",
-		"-charset", "-lang", "-sep", "-struct", "-fileOrder", "-progresslevel",
+		"-charset", "-lang", "-sep", "-fileOrder", "-progresslevel",
 		"-geotag", "-csv":
 		return true
 	}
@@ -220,9 +217,6 @@ func mergePreopenDirLists(existing, add []string) (merged []string, changed bool
 
 func cleanPreopenDir(dir string) string {
 	dir = filepath.Clean(dir)
-	if real, err := filepath.EvalSymlinks(dir); err == nil {
-		return real
-	}
 	return dir
 }
 
@@ -234,14 +228,6 @@ func pathWithinDir(path, dir string) bool {
 	}
 	if ad, err := filepath.Abs(dir); err == nil {
 		dir = ad
-	}
-	if rd, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = rd
-	}
-	if rp, err := filepath.EvalSymlinks(path); err == nil {
-		path = rp
-	} else if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
-		path = filepath.Join(parent, filepath.Base(path))
 	}
 	if path == dir {
 		return true

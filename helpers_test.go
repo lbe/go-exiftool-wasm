@@ -186,7 +186,7 @@ func TestProcessStubKill(t *testing.T) {
 	t.Run("closes writer and returns close error", func(t *testing.T) {
 		wantErr := errors.New("close failure")
 		wc := &stubWriteCloser{closeErr: wantErr}
-		p := &processStub{server: &Server{stdinW: wc}}
+		p := &processStub{server: &Server{generation: &serverGeneration{stdinW: wc}}}
 
 		err := p.Kill()
 		if !wc.closed {

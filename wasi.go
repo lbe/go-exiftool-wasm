@@ -36,7 +36,19 @@ func (w *wasiState) mem() []byte {
 // stdinAdapter adapts guestIO.ReadStdin to io.Reader.
 type stdinAdapter struct{ gio guestIO }
 
-func (a *stdinAdapter) Read(p []byte) (int, error) { return a.gio.ReadStdin(p) }
+func (a *stdinAdapter) Read(p []byte) (int, error) {
+	server, owned := a.gio.(*serverIO)
+	if owned && server.stopped.Load() {
+		panic(exitPanic{code: 0})
+	}
+	n, err := a.gio.ReadStdin(p)
+	if owned && (server.stopped.Load() || (len(p) > 0 && n == 0 && err != nil)) {
+		// EOF and closed pipes must leave the stay_open evaluator, not feed its
+		// warning/poll loop. One-shot stdin retains ordinary Reader semantics.
+		panic(exitPanic{code: 0})
+	}
+	return n, err
+}
 
 // ioWriterFunc adapts a write func to io.Writer.
 type ioWriterFunc func([]byte) (int, error)
@@ -48,10 +60,23 @@ func (f ioWriterFunc) Write(p []byte) (int, error) { return f(p) }
 // each syscall (required after guest memory growth). guestIO is retained for
 // stdout/stderr capture in directIO and serverIO modes.
 func initWASIState(ws *wasiState, mod *wasm2go.Module, gio guestIO, moduleCfg *wasihost.ModuleConfig) {
+	writer := func(write func([]byte) (int, error)) ioWriterFunc {
+		return func(p []byte) (int, error) {
+			server, owned := gio.(*serverIO)
+			if owned && server.stopped.Load() {
+				panic(exitPanic{code: 0})
+			}
+			n, err := write(p)
+			if owned && (server.stopped.Load() || err != nil) {
+				panic(exitPanic{code: 0})
+			}
+			return n, err
+		}
+	}
 	moduleCfg = moduleCfg.
 		WithStdin(&stdinAdapter{gio}).
-		WithStdout(ioWriterFunc(gio.WriteStdout)).
-		WithStderr(ioWriterFunc(gio.WriteStderr))
+		WithStdout(writer(gio.WriteStdout)).
+		WithStderr(writer(gio.WriteStderr))
 	ws.State = wasihost.New(func() []byte { return *mod.Xmemory().Slice() }, moduleCfg)
 	ws.guestIO = gio
 }
