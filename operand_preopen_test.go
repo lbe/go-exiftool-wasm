@@ -146,3 +146,15 @@ func assertPreopenDirs(t *testing.T, got, want []string) {
 		t.Errorf("operandPreopenDirs = %v, want %v", got, want)
 	}
 }
+
+func TestV2METARepair_StructDoesNotConsumeOperand(t *testing.T) {
+	cwd := t.TempDir()
+	for _, args := range [][]string{
+		{"-json", "-G1", "-n", "-struct", "/outside/repair/photo.jpg"},
+		{"-ext", "jpg", "-struct", "/outside/repair/photo.jpg"},
+		{"-charset", "filename=utf8", "-struct", "/outside/repair/photo.jpg"},
+	} {
+		got := operandPreopenDirs(cwd, args)
+		assertPreopenDirs(t, got, []string{"/outside/repair"})
+	}
+}

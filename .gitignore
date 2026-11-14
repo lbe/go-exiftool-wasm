@@ -29,3 +29,6 @@ zeroper/zeroperl.wasm
 
 # Built test consumer (go build in testdata/)
 testdata/legacyzeroperlconsumer/legacyzeroperlconsumer
+
+AGENTS.md
+CLAUDE.md

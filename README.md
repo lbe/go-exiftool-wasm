@@ -24,11 +24,11 @@ Upstream ExifTool (Phil Harvey) and metadata: [exiftool.org](https://exiftool.or
   first read using a 2000-entry LRU cache
   ([`lbe/cfsread`](https://pkg.go.dev/github.com/lbe/cfsread)).
 - **WASI host** - [`github.com/lbe/wasm2go-wasi-host`](https://github.com/lbe/wasm2go-wasi-host)
-  implements WASI snapshot-preview1 for the wasm2go module. Mounts and syscalls are configured through
-  `wasihost.NewModuleConfig()` in `buildModuleConfig`: writable host directory preopen at `/host` for
-  the caller's working directory (guest cwd `/host` via Perl preamble `chdir`); read-only FS mounts at
-  `/lib` and `/bin`; host cwd path aliases; `os.TempDir()`; and operand parent directories outside
-  cwd/temp for [Command] (see [operand_preopen.go](operand_preopen.go)).
+  implements WASI snapshot-preview1 for the wasm2go module. Mounts and syscalls are configured
+  through `wasihost.NewModuleConfig()` in `buildModuleConfig`: writable host directory preopen at
+  `/host` for the caller's working directory (guest cwd `/host` via Perl preamble `chdir`);
+  read-only FS mounts at `/lib` and `/bin`; host cwd path aliases; `os.TempDir()`; and operand
+  parent directories outside cwd/temp for [Command] (see [operand_preopen.go](operand_preopen.go)).
 - **Same behavior everywhere** - one toolchain-based interpreter implementation on Linux, macOS,
   Windows, etc.
 - **Trade-off** - cold start is heavy (on the order of **~7-10 seconds** to initialize the
@@ -55,6 +55,14 @@ out, err = e.Command("-Artist", "photo.jpg")
 
 Package docs, API details, and filesystem semantics (mount layout, temp dir, `Arg1` / `Config`): run
 **`go doc -all`** or open [pkg.go.dev](https://pkg.go.dev/github.com/lbe/go-exiftool-wasm).
+
+Absolute file operands retain their original symlink spelling; their parent directories and
+canonical aliases are registered without mounting the host root. `-struct` does not consume the
+following file operand. A Server remount joins its old interpreter before starting a replacement.
+`Shutdown` joins the current interpreter; `Close` returns without waiting, and stops it at its next
+host-I/O operation. Neither method preempts arbitrary native guest computation. Serialize lifecycle
+calls with commands. Each command drains its stderr; diagnostics exceeding 64 KiB return an explicit
+overflow error while preserving command framing for later calls.
 
 ## Development
 
@@ -118,9 +126,9 @@ Version resolution precedence is:
 
 `Command` and `CommandContext` run ExifTool with file paths relative to the process working
 directory (or host-absolute paths). The host cwd is preopened at `/host`; guest cwd is `/host`.
-`os.TempDir()` and operand parent directories outside cwd/temp are preopened for [Command].
-File operands are passed to ExifTool as host-absolute paths. ExifTool can write (or overwrite)
-files in the working directory using flags like `-overwrite_original` or `-o <outfile>`.
+`os.TempDir()` and operand parent directories outside cwd/temp are preopened for [Command]. File
+operands are passed to ExifTool as host-absolute paths. ExifTool can write (or overwrite) files in
+the working directory using flags like `-overwrite_original` or `-o <outfile>`.
 
 ## License
 
