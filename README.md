@@ -68,7 +68,9 @@ overflow error while preserving command framing for later calls.
 
 ### Tests
 
-See [TESTING.md](TESTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Fast local check (unit only):
+See [TESTING.md](TESTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Test files are named by kind:
+`*_test.go` (unit, untagged), `*_integration_test.go` (`integration` tag), and `*_e2e_test.go`
+(`e2e` tag). Fast local check (unit only):
 
 ```bash
 go test ./... -count=1
@@ -89,7 +91,7 @@ The generated zeroperl Go source and Perl install prefix come from
 (Docker or Apple Container): build the image, run the container, and copy **`/artifacts`** into a
 host directory (as shown there, e.g. `./output/`).
 
-From the build output directory, install these into **this** repo under `embed/`:
+From the build output directory, install these into **this** repo:
 
 | Artifact from zeroperl output     | Path in go-exiftool             |
 | --------------------------------- | ------------------------------- |
@@ -99,9 +101,18 @@ From the build output directory, install these into **this** repo under `embed/`
 Use the generated **`zeroperl.go`** artifact unless you intentionally switch runtimes. The ExifTool
 script is loaded from `embed/perl-wasi-prefix/bin/exiftool` in the embedded prefix.
 
-After copying `perl-wasi-prefix/` into `embed/`, run **`go generate ./...`** to re-compress the tree
-with `cfsread-lz4`. This updates the LZ4-compressed files in place so the embedded binary reflects
-the new Perl build.
+`internal/zeroperl/zeroperl.go` is wasm2go output built with `-embed`; its module data lives beside
+it in `zeroperl.dat`. Do not edit either file by hand.
+
+After copying `perl-wasi-prefix/` into `embed/` (or running `dist.pl`, below), LZ4-compress the tree
+in place:
+
+```bash
+go run github.com/lbe/cfsread/cmd/cfsread-lz4 embed/perl-wasi-prefix
+```
+
+File names are unchanged; files that are already compressed or do not shrink are skipped, so
+re-running is safe.
 
 zeroperl's README also documents **build arguments** (`PERL_VERSION`, `EXIFTOOL_VERSION`,
 `BUILD_EXIFTOOL`, memory/stack, etc.). The embedded prefix layout (for example `lib/perl5` and

@@ -77,8 +77,8 @@ func commandEvalModule(stdin io.Reader, arg ...string) ([]byte, error) {
 	}
 	out, err := evalModule(mod, ws, argv...)
 	if err != nil {
-		if out, finishErr := finishCommandResult(out, arg); finishErr != nil {
-			return out, finishErr
+		if finished, finishErr := finishCommandResult(out, arg); finishErr != nil {
+			return finished, finishErr
 		}
 		return out, err
 	}

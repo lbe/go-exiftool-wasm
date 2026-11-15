@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -190,17 +189,7 @@ func buildModuleConfig(cwd string, libFS, binFS fs.FS, workFS fs.FS, writableDir
 	return moduleCfg
 }
 
-// newModule creates a zeroperl module using the process working directory for
-// the /host preopen. Prefer [newModuleAt] when cwd is already known.
-func newModule(gio guestIO, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, nil, fmt.Errorf("exiftool: getwd: %w", err)
-	}
-	return newModuleAt(gio, cwd, workFS, writableDirs)
-}
-
-// newModuleAt is like [newModule] but uses the supplied cwd for the /host
+// newModuleAt creates a zeroperl module using the supplied cwd for the /host
 // preopen so it matches operand resolution in [commandEvalModule].
 func newModuleAt(gio guestIO, cwd string, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
 	cwd = filepath.Clean(cwd)

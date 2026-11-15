@@ -26,28 +26,30 @@ help:
 .PHONY: test
 test:
 	# Unit tests only; pass ARGS="-count=1 -v" as needed
-	go test $(PKG) $(ARGS)
+	time ( go test $(PKG) $(ARGS) )
 
 .PHONY: test-all
 test-all:
 	# Full suite without race detector
-	go test -tags=integration,e2e ./... $(ARGS)
+	time ( go test -tags=integration,e2e ./... $(ARGS) )
 
 .PHONY: test-race
 test-race:
 	# Matches GitHub Actions: full suite under -race
-	go test -tags=integration,e2e $(PKG) -race $(ARGS)
+	time ( go test -tags=integration,e2e $(PKG) -race $(ARGS) )
 
 .PHONY: lint
 lint:
-	golangci-lint run --max-same-issues 0 ./...
+	time ( golangci-lint run --max-same-issues 0 ./... )
 
 .PHONY: cover
 cover:
+	time ( \
 	go test -tags=integration,e2e ./... -coverprofile=coverage.out -count=1 \
-		-coverpkg=github.com/lbe/go-exiftool-wasm,github.com/lbe/go-exiftool-wasm/internal/testutil
-	go tool cover -html=coverage.out -o coverage.html
-	go tool cover -func=coverage.out | tail -n 1
+		-coverpkg=github.com/lbe/go-exiftool-wasm,github.com/lbe/go-exiftool-wasm/internal/testutil; \
+	go tool cover -html=coverage.out -o coverage.html; \
+	go tool cover -func=coverage.out | tail -n 1; \
+	)
 	@echo "Coverage report: coverage.html"
 
 .PHONY: clean

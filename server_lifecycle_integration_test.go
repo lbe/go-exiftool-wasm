@@ -21,7 +21,7 @@ func repairJoined(t *testing.T, done <-chan struct{}) {
 	}
 }
 
-func TestV2METARepair_RestartJoinsGeneration(t *testing.T) {
+func TestServerRestartJoinsGeneration(t *testing.T) {
 	if repairSubprocess(t, "restart-join") {
 		return
 	}
@@ -58,7 +58,7 @@ func TestV2METARepair_RestartJoinsGeneration(t *testing.T) {
 	repairJoined(t, old)
 }
 
-func TestV2METARepair_PipeCloseFirst(t *testing.T) {
+func TestServerPipeCloseFirstJoins(t *testing.T) {
 	if repairSubprocess(t, "pipe-close-first") {
 		return
 	}
@@ -72,7 +72,7 @@ func TestV2METARepair_PipeCloseFirst(t *testing.T) {
 	}
 }
 
-func TestV2METARepair_ForceCloseJoinsAtIO(t *testing.T) {
+func TestServerForceCloseJoinsAtIO(t *testing.T) {
 	if repairSubprocess(t, "force-close") {
 		return
 	}
@@ -107,7 +107,7 @@ func (w repairShutdownWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func TestV2METARepair_ShutdownConsumedBeforeClose(t *testing.T) {
+func TestServerShutdownConsumedBeforeClose(t *testing.T) {
 	if repairSubprocess(t, "shutdown-first") {
 		return
 	}
@@ -120,7 +120,7 @@ func TestV2METARepair_ShutdownConsumedBeforeClose(t *testing.T) {
 	repairJoined(t, old)
 }
 
-func TestV2METARepair_ScannerErrorsJoin(t *testing.T) {
+func TestServerScannerErrorsJoin(t *testing.T) {
 	if repairSubprocess(t, "scanner-errors") {
 		return
 	}

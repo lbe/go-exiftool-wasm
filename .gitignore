@@ -32,3 +32,5 @@ testdata/legacyzeroperlconsumer/legacyzeroperlconsumer
 
 AGENTS.md
 CLAUDE.md
+
+coverage.*

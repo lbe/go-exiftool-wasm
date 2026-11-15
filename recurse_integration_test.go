@@ -14,14 +14,14 @@ import (
 func TestCommandDirectory(t *testing.T) {
 	out, err := Command(nil, "-T", "-Filename", "testdata")
 	assertCommandFilenameList(t, out, err, []string{
-			"base.jpg",
-			"empty.jpg",
-			"sample.jpg",
-			"sample.png",
-			"sample.tiff",
-			"sample_gps.jpg",
-			"sample_noexif.jpg",
-			"test.jpg",
+		"base.jpg",
+		"empty.jpg",
+		"sample.jpg",
+		"sample.png",
+		"sample.tiff",
+		"sample_gps.jpg",
+		"sample_noexif.jpg",
+		"test.jpg",
 	}, func(t *testing.T, lines []string) {
 		for _, line := range lines {
 			if strings.Contains(line, "/") {

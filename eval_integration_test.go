@@ -18,8 +18,12 @@ const scriptPreamble = "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR)
 // (chdir to /host). args are passed as @ARGV. os.TempDir() is preopened
 // writable via wasihost.WithHostDirectoryPreopen for file I/O in tests.
 func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
 	guestIO := newDirectIO(nil)
-	mod, ws, err := newModule(guestIO, nil, []string{os.TempDir()})
+	mod, ws, err := newModuleAt(guestIO, cwd, nil, []string{os.TempDir()})
 	if err != nil {
 		return nil, err
 	}

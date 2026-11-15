@@ -1,72 +1,91 @@
-//go:build e2e
-
 package exiftool
 
 import (
-	"bytes"
-	"encoding/json"
 	"testing"
 )
 
-func TestExiftoolVersion(t *testing.T) {
-	out, err := Command(nil, "-ver")
-	if err != nil {
-		t.Fatalf("Command: %v", err)
-	}
+func TestCommandArgsDefault(t *testing.T) {
+	savedArg1, savedConfig := Arg1, Config
+	defer func() { Arg1, Config = savedArg1, savedConfig }()
 
-	ver := string(bytes.TrimSpace(out))
-	if ver == "" {
-		t.Fatal("empty version output")
+	Arg1 = ""
+	Config = ""
+
+	args := commandArgs([]string{"-ver"})
+	if len(args) != 3 {
+		t.Fatalf("expected 3 args, got %d: %v", len(args), args)
+	}
+	if args[0] != "-charset" {
+		t.Errorf("expected -charset, got %q", args[0])
+	}
+	if args[1] != "filename=utf8" {
+		t.Errorf("expected filename=utf8, got %q", args[1])
+	}
+	if args[2] != "-ver" {
+		t.Errorf("expected -ver, got %q", args[2])
 	}
 }
 
-func TestExiftoolJSON(t *testing.T) {
-	out, err := Command(nil, "-json", "testdata/test.jpg")
-	if err != nil {
-		t.Fatalf("Command: %v", err)
-	}
-	if len(out) == 0 {
-		t.Fatal("no output from exiftool")
-	}
+func TestCommandArgsWithArg1(t *testing.T) {
+	savedArg1, savedConfig := Arg1, Config
+	defer func() { Arg1, Config = savedArg1, savedConfig }()
 
-	var result []map[string]interface{}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("invalid JSON: %v\nraw: %s", err, string(out))
-	}
+	Arg1 = "/usr/bin/perl"
+	Config = ""
 
-	if len(result) != 1 {
-		t.Fatalf("expected 1 image result, got %d", len(result))
+	args := commandArgs([]string{"-ver"})
+	found := false
+	for _, a := range args {
+		if a == "/usr/bin/perl" {
+			found = true
+			break
+		}
 	}
-
-	fields := result[0]
-	if _, ok := fields["ExifToolVersion"]; !ok {
-		t.Error("missing ExifToolVersion field")
-	}
-	if v, ok := fields["Make"]; !ok {
-		t.Error("missing Make field")
-	} else if v != "samsung" {
-		t.Errorf("expected Make=samsung, got %v", v)
-	}
-	if v, ok := fields["Model"]; !ok {
-		t.Error("missing Model field")
-	} else if v != "SM-G930P" {
-		t.Errorf("expected Model=SM-G930P, got %v", v)
+	if !found {
+		t.Errorf("expected Arg1 in args, got %v", args)
 	}
 }
 
-func TestExiftoolMultipleArgs(t *testing.T) {
-	out, err := Command(nil, "-json", "-Make", "-Model", "testdata/test.jpg")
-	if err != nil {
-		t.Fatalf("Command: %v", err)
-	}
+func TestCommandArgsWithConfig(t *testing.T) {
+	savedArg1, savedConfig := Arg1, Config
+	defer func() { Arg1, Config = savedArg1, savedConfig }()
 
-	var result []map[string]interface{}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	Arg1 = ""
+	Config = "/path/to/config"
 
-	fields := result[0]
-	if len(fields) < 3 {
-		t.Errorf("expected at least 3 fields (SourceFile, Make, Model), got %d", len(fields))
+	args := commandArgs([]string{"-ver"})
+	foundConfig, foundConfigPath := false, false
+	for i, a := range args {
+		if a == "-config" {
+			foundConfig = true
+			if i+1 < len(args) && args[i+1] == "/path/to/config" {
+				foundConfigPath = true
+			}
+		}
+	}
+	if !foundConfig || !foundConfigPath {
+		t.Errorf("expected -config /path/to/config in args, got %v", args)
+	}
+}
+
+func TestCommandArgsWithBoth(t *testing.T) {
+	savedArg1, savedConfig := Arg1, Config
+	defer func() { Arg1, Config = savedArg1, savedConfig }()
+
+	Arg1 = "/usr/bin/perl"
+	Config = "/path/to/config"
+
+	if commandArgs([]string{"-ver"})[0] != "/usr/bin/perl" {
+		t.Errorf("expected Arg1 first")
+	}
+	args := commandArgs([]string{"-ver"})
+	foundConfig := false
+	for i, a := range args {
+		if a == "-config" && i+1 < len(args) && args[i+1] == "/path/to/config" {
+			foundConfig = true
+		}
+	}
+	if !foundConfig {
+		t.Errorf("expected -config in args, got %v", args)
 	}
 }

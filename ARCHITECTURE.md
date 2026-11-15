@@ -1,183 +1,273 @@
-# Architecture: go-exiftool
+# Architecture: go-exiftool-wasm
 
-This document describes the current wasm2go-native architecture: embedded Perl assets, the external
-`wasm2go-wasi-host` WASI implementation, and how single-shot APIs differ from Server stay_open mode.
+Package `exiftool` runs [ExifTool](https://exiftool.org/) in-process. Perl and ExifTool are compiled
+to WebAssembly by [zeroperl](https://github.com/uswriting/zeroperl), translated to native Go by
+wasm2go, and given a WASI environment by
+[wasm2go-wasi-host](https://github.com/lbe/wasm2go-wasi-host). No WASM interpreter, host Perl, or
+`exiftool` binary is involved at run time.
 
-## Goals
+## Goals and constraints
 
-- Run ExifTool without os/exec or a host exiftool binary.
-- Embed Perl runtime assets and ExifTool script in the module.
-- Keep public APIs stable for callers: **Command**, **CommandContext**, **NewServer**, and
-  **Server.Command** (plus decode helpers and package vars retained for ncruces compatibility).
+- No `os/exec` and no host `exiftool`; everything ships inside the Go module.
+- Public API compatible with `ncruces/go-exiftool`: `Command`, `CommandContext`, `NewServer`,
+  `Server.Command`, `Server.Close`, `Server.Shutdown`, `Unmarshal`, `ExitError`, and the package
+  variables `Exec`, `Arg1`, `Config`. `Exec` is retained but ignored.
+- Output (stdout, `SourceFile` spellings, exit status) should match native ExifTool for the same
+  arguments.
 
-## Runtime model
-
-The project does not use a general WASM interpreter at execution time. Instead, zeroperl is emitted
-as native Go inside **`internal/zeroperl`** (wasm2go) and invoked directly from package
-**`exiftool`**.
+## Layers
 
 ```mermaid
 flowchart TB
-  subgraph app [Caller]
-    API[Command / CommandContext / Server]
+  subgraph caller [Caller]
+    API["Command / CommandContext<br/>NewServer / Server.Command"]
   end
-  subgraph host [Go package exiftool]
-    MOD[wasm2go Module internal]
-    WASI[wasiState embeds wasihost.State]
-    IO[guestIO stdio adapters]
-    FS[wasihost preopens + cachedFS LRU + LZ4]
+  subgraph pkg [package exiftool]
+    CMD["cmd.go<br/>one-shot eval"]
+    SRV["server.go<br/>stay_open generations"]
+    OPS["operand_preopen.go<br/>operand paths and preopen dirs"]
+    MODCFG["exiftool.go<br/>mount layout, module setup, eval"]
+    WASI["wasi.go<br/>wasiState, proc_exit, stdio adapters"]
+    IO["io.go / serverIO<br/>guestIO backends"]
+    CFS["cachefs.go<br/>LZ4 + LRU over embed.FS"]
   end
-  subgraph guest [zeroperl guest]
-    ZP[zeroperl init/eval]
-    PL[Perl + ExifTool]
+  subgraph deps [Dependencies]
+    ZP["internal/zeroperl<br/>wasm2go output + zeroperl.dat"]
+    HOST["wasm2go-wasi-host<br/>WASI preview1 syscalls, preopens"]
+    CFSR["lbe/cfsread"]
+    EMB["embed/perl-wasi-prefix<br/>Perl stdlib + ExifTool (LZ4)"]
   end
 
-  API --> MOD
-  MOD --> WASI
-  MOD --> IO
-  WASI --> FS
-  ZP --> PL
+  API --> CMD
+  API --> SRV
+  CMD --> OPS
+  SRV --> OPS
+  CMD --> MODCFG
+  SRV --> MODCFG
+  MODCFG --> WASI
+  MODCFG --> CFS
+  WASI --> IO
+  WASI --> HOST
+  MODCFG --> ZP
+  CFS --> CFSR
+  CFS --> EMB
+  ZP -. "WASI imports" .-> WASI
 ```
 
-## Embedded assets
+## Source files
 
-| Asset                            | Binding          | Role                                                                               |
-| -------------------------------- | ---------------- | ---------------------------------------------------------------------------------- |
-| embed/perl-wasi-prefix           | go:embed all     | Perl stdlib and wasm32-wasi modules (LZ4-compressed)                               |
-| internal/zeroperl                | generated source | Native Go representation of zeroperl guest module (not importable outside module)  |
-| github.com/lbe/wasm2go-wasi-host | go module        | WASI snapshot-preview1 host for wasm2go (ModuleConfig, preopens, syscalls)         |
-| cachefs.go                       | package source   | internal cachedFS wrapper; transparent LZ4 decompression and LRU cache via cfsread |
+| File                 | Responsibility                                                                                                                                  |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init.go`            | Package documentation; `Exec`, `Arg1`, `Config`                                                                                                 |
+| `cmd.go`             | `Command`, `CommandContext`, `ExitError`; one-shot eval and `-json` per-file error detection                                                    |
+| `server.go`          | `Server`, interpreter generations, `serverIO` (pipes, bounded stderr, framing), stay_open protocol, restart                                     |
+| `exiftool.go`        | `go:embed` of the Perl prefix, `perlFS`, argv prefix (`Arg1`/`Config`/charset), mount layout (`buildModuleConfig`), `newModuleAt`, `evalModule` |
+| `operand_preopen.go` | Finds file operands in argv, derives extra writable preopen dirs, chooses the operand spelling passed to the guest                              |
+| `wasi.go`            | `wasiState` (embeds `wasihost.State`), `exitPanic`, stdin/stdout/stderr adapters                                                                |
+| `io.go`              | `guestIO` interface and the in-memory `directIO` backend                                                                                        |
+| `cachefs.go`         | `cachedFS`: `fs.FS` wrapper with transparent LZ4 decompression and LRU cache (via `cfsread`)                                                    |
+| `decode.go`          | `Unmarshal` for line-oriented `Key: value` output                                                                                               |
+| `printer.go`         | Buffered line writer; currently referenced only by tests                                                                                        |
+| `internal/zeroperl`  | Generated wasm2go module (`zeroperl.go`, `zeroperl.dat`); never hand-edited                                                                     |
+| `internal/testutil`  | Test helpers (`Root`, `SampleJPEG`)                                                                                                             |
 
-The ExifTool driver script is loaded from `embed/perl-wasi-prefix/bin/exiftool` inside the embedded
-perl-wasi-prefix tree.
+## Guest module
 
-At eval time, `exiftoolEvalWrapper` prepends `/lib/perl5` and `/lib/perl5/wasm32-wasi` to `@INC`
-(when present in the prefix). The exact tree layout depends on the zeroperl build embedded in
-`embed/perl-wasi-prefix`.
+`newModuleAt` creates one guest instance:
 
-## WASI host implementation
+1. `wasm2go.New(ws, ws)`: the same `*wasiState` serves both the `env` and `wasi_snapshot_preview1`
+   import interfaces.
+2. `initWASIState` attaches stdio adapters for the chosen `guestIO` and constructs
+   `wasihost.New(memFn, cfg)`. `memFn` re-reads `mod.Xmemory()` on every syscall so memory growth is
+   safe.
+3. `mod.X_initialize()`.
 
-WASI is provided by **[github.com/lbe/wasm2go-wasi-host](https://github.com/lbe/wasm2go-wasi-host)**
-(`wasihost` import).
+Evaluation then calls `Xzeroperl_init` and `Xzeroperl_eval` with `exiftoolEvalWrapper`, a short Perl
+preamble that enables autoflush, `chdir`s to `/host`, prepends `/lib/perl5` and
+`/lib/perl5/wasm32-wasi` to `@INC`, sets `$0`, and `do`es `/bin/exiftool`. Strings and the argv
+array are copied into guest memory with `Xmalloc` and released with `Xfree`.
 
-Integration in this package:
+**Exit model.** `wasiState.Xproc_exit` panics with `exitPanic{code}`. Every eval boundary
+(`evalModule`, `initModule`, the Server evaluator goroutine) recovers it; any other panic is
+re-raised. A `wasihost.State` is not safe for concurrent use, so each module is driven by one
+goroutine.
 
-1. **`buildModuleConfig`** returns an immutable `wasihost.ModuleConfig` builder chain: read-only FS
-   mounts (`WithReadOnlyFS`), writable host directory preopens (`WithHostDirectoryPreopen`), clocks,
-   nanosleep, and `crypto/rand`.
-2. **`initWASIState`** adds stdio via `WithStdin` / `WithStdout` / `WithStderr`, then constructs
-   `wasihost.New(func() []byte { return *mod.Xmemory().Slice() }, moduleCfg)`. The memory callback
-   is re-invoked on every syscall so guest memory growth stays valid.
-3. **`wasiState`** embeds `*wasihost.State` and is passed to `wasm2go.New(ws, ws)` as both import
-   handlers. It overrides `Xproc_exit` to panic with `exitPanic{code}` instead of
-   `wasihost.ExitError` so eval boundaries recover exit codes uniformly.
+## Filesystem and mounts
 
-Each zeroperl module instance has its own `wasihost.State` (not concurrent-safe across goroutines).
+```mermaid
+flowchart LR
+  subgraph guest [Guest paths]
+    G_HOST["/host (guest cwd)"]
+    G_LIB["/lib"]
+    G_BIN["/bin"]
+    G_DEV["/dev"]
+    G_ALIAS["host-absolute spellings<br/>of cwd, TempDir, operand dirs"]
+  end
+  subgraph hostside [Backing]
+    CWD["host cwd (writable)"]
+    PERL["perlFS: embedded prefix (read-only)"]
+    NULL["devNullFS (read-only)"]
+    DIRS["host dirs (writable)"]
+  end
+  G_HOST --> CWD
+  G_LIB --> PERL
+  G_BIN --> PERL
+  G_DEV --> NULL
+  G_ALIAS --> DIRS
+```
 
-`proc_exit` panics are recovered at eval boundaries (`evalModule`, Server eval goroutine,
-`initModule`).
+`buildModuleConfig` (`exiftool.go`) builds the layout:
 
-## Filesystem/mount model
+| Guest path                           | Kind                         | Backing                                                              |
+| ------------------------------------ | ---------------------------- | -------------------------------------------------------------------- |
+| `/host`                              | writable host dir preopen    | caller cwd; guest cwd after the preamble `chdir`                     |
+| `/lib`, `/bin`                       | read-only `fs.FS`            | `perlFS()` subtrees; `/bin/exiftool` is the driver script            |
+| `/dev`                               | read-only `fs.FS`            | `devNullFS` (`/dev/null`)                                            |
+| cwd's host spelling(s)               | writable host dir preopen    | cwd, also at its `EvalSymlinks` spelling (e.g. macOS `/private/var`) |
+| `os.TempDir()` spelling(s)           | writable host dir preopen    | temp dir                                                             |
+| operand parent dirs outside cwd/temp | writable host dir preopen    | from `operandPreopenDirs`, each with its canonical alias             |
+| `/work`                              | read-only `fs.FS` (optional) | `workFS` parameter; every current caller passes `nil`                |
 
-`buildModuleConfig` in `exiftool.go` assembles the mount layout from a `wasihost.NewModuleConfig()`
-builder chain:
+wasm2go-wasi-host resolves a guest path through the **longest matching preopen**. Writable host
+preopens enforce `EvalSymlinks` confinement, so a symlink that escapes its preopen fails with
+`ENOTCAPABLE`. That is why every directory an operand lives in must be preopened.
 
-- `/host` (`hostWorkDir`) is the **primary writable host directory preopen** for the caller's
-  working directory so ExifTool can read and write files there. The guest cwd is set to `/host` via
-  Perl preamble `chdir` so relative paths resolve there instead of aliasing the read-only `/lib` and
-  `/bin` mount prefixes.
-- **Host cwd path aliases**: the host cwd is also preopened at its guest absolute path (via
-  `registerHostDirPreopenAliases`) so host-absolute file arguments remain reachable (for example
-  `/var` vs `/private/var` on macOS).
-- `/lib` is a **read-only FS** (`moduleCfg.WithReadOnlyFS("/lib", fs.Sub(perlFS(), "lib"))`) serving
-  the embedded Perl standard library.
-- `/bin` is a **read-only FS** (`moduleCfg.WithReadOnlyFS("/bin", fs.Sub(perlFS(), "bin"))`) serving
-  the ExifTool script at `/bin/exiftool`.
-- `/dev` is a read-only FS backed by `devNullFS`.
-- **`os.TempDir()` and operand parent directories** from [commandWritableDirs] are preopened via
-  `registerHostDirPreopenAliases` as **writable** host mounts. Command rewrites file operands (and
-  path-valued flags such as `-config`) to host-absolute paths. Operand preopens widen writable host
-  access to parent directories of those paths; callers should not pass unintended paths as operands.
-  Registration and deduplication preserve lexical directory spellings, including nested symlinks;
-  each mount also registers its canonical alias. Membership checks use the mounted spelling so an
-  alias outside cwd/temp is not discarded just because its target is already mounted. `-struct` is a
-  flag with no following value, so a tags-only command registers its file operand independently.
-- An optional `/work` read-only FS can be supplied.
+**Operand handling** (`operand_preopen.go`). `scanFileOperands` walks argv, skipping flags, values
+of flags that take a non-path argument (`-ext`, `-charset`, …), and honoring `--`. Path-valued flags
+such as `-config` and `-o` count as operands. For each operand:
 
-Separate preopens for `/host`, `/lib`, and `/bin` keep embedded assets and the writable working
-directory isolated, matching the `wasm2go-wasi-host` mount model.
+- `operandPreopenDirs` adds its parent directory (lexical and canonical spellings) when it lies
+  outside cwd and `os.TempDir()`.
+- `guestPathForOperand` chooses the spelling ExifTool sees: the original relative spelling for a
+  path under cwd; the host-absolute path for anything outside cwd or under temp only; an absolute
+  path under cwd becomes relative to cwd.
 
-`perlFS()` returns a process-level internal cachedFS singleton (initialized once via `sync.Once`)
-backed by a `cfsread.Reader` with LZ4 magic-byte decompression and a 2000-entry LRU cache. The
-`embed/perl-wasi-prefix` tree is stored LZ4-compressed in the binary; files are decompressed on
-first access and subsequent reads are served from the in-memory cache with zero allocations.
+**Embedded tree.** `perlFS()` is a process-wide `cachedFS` over `embed/perl-wasi-prefix`, built once
+with a 2000-entry LRU. Files are stored LZ4-compressed in the binary (see README for the
+`cfsread-lz4` step) and decompressed on first read.
 
-## I/O model
+## I/O
 
-Internal **guestIO** abstracts stdin/stdout/stderr for both execution modes:
+```mermaid
+classDiagram
+  class guestIO {
+    <<interface>>
+    ReadStdin(buf) (int, error)
+    WriteStdout(buf) (int, error)
+    WriteStderr(buf) (int, error)
+    CloseStdin()
+    CloseAll()
+  }
+  class directIO {
+    StdinR io.Reader
+    StdoutB *bytes.Buffer
+    StderrB *bytes.Buffer
+  }
+  class serverIO {
+    stdin/stdout os.Pipe pairs
+    stderrB bounded to 64 KiB
+    stderrPending framing matcher
+    stderrReady chan
+    stopped atomic.Bool
+  }
+  guestIO <|.. directIO
+  guestIO <|.. serverIO
+```
 
-- **directIO** buffers stdin/stdout/stderr for single-shot Command paths.
-- **serverIO** (pipe-backed): used by Server to preserve stream semantics and framing behavior. Its
-  stderr payload backing is capped at 64 KiB. A separate fixed-size prefix buffer recognizes the
-  ready delimiter across writes even after overflow. Command waits for stdout and stderr frames,
-  copies and resets the payload, and returns an explicit overflow error if any diagnostics were
-  truncated. The next command starts with clean framing and diagnostic state.
+- `directIO` (one-shot): stdin from the caller's reader, stdout/stderr captured in memory.
+- `serverIO` (stay_open): stdin and stdout are `os.Pipe`s. Stderr bytes are matched against the
+  ready token with a fixed-size prefix buffer, so frames split across writes are recognized even
+  after the payload overflows its 64 KiB cap. A complete token signals `stderrReady`.
+- The stdio adapters in `wasi.go` turn EOF, closed pipes, or a stopped `serverIO` into
+  `exitPanic{0}`. A stay_open evaluator therefore leaves at its next host I/O call instead of
+  spinning in ExifTool's poll loop. One-shot stdin keeps ordinary `io.Reader` semantics.
 
-## Execution flows
+## One-shot flow
 
-Single-shot (**Command** / **CommandContext**):
+```mermaid
+sequenceDiagram
+  participant C as Caller
+  participant Cmd as commandEvalModule
+  participant Ops as operand_preopen
+  participant M as newModuleAt / evalModule
+  participant G as zeroperl guest
+  C->>Cmd: Command(stdin, args...)
+  Cmd->>Ops: prepareCommandEval(cwd, args)
+  Ops-->>Cmd: writable dirs, argv (prefix + charset + guest spellings)
+  Cmd->>M: newModuleAt(directIO, cwd, nil, dirs)
+  Cmd->>M: evalModule(argv)
+  M->>G: zeroperl_init, zeroperl_eval(wrapper, argv)
+  G-->>M: proc_exit(code) as exitPanic
+  M-->>Cmd: stdout, or ExitError{code, stderr}
+  Cmd-->>C: stdout / error
+```
 
-1. Resolve cwd; build writable preopens via [commandWritableDirs] (temp + [operandPreopenDirs]).
-2. `newModule`: `wasm2go.New(wasiState, wasiState)`, `initWASIState` + `buildModuleConfig`,
-   `X_initialize`.
-3. Rewrite file operands to host-absolute paths ([absolutizeOperands]), then `evalModule`.
-4. Recover `exitPanic` from `proc_exit`; exit code 0 returns stdout; -json per-file Error yields
-   [ExitError] code 1.
+Result rules (`cmd.go`):
 
-Server stay_open:
+- Exit 0 with empty stderr: stdout, or `ExitError{Code: 1}` if `-json` output contains a per-file
+  `Error` field (matching native exit status).
+- Exit 0 with stderr text: stdout plus an error carrying the stderr text.
+- Non-zero exit: captured stdout plus `ExitError{Code, Msg}` including stderr.
 
-1. Start one long-lived module and run zeroperl_eval with stay_open args.
-2. Send commands through stdin with -execute boundary framing.
-3. Parse output frames with splitReadyToken.
-4. Shutdown/restart via stay_open false and controlled stop/finalize.
+`CommandContext` checks `ctx` only before starting. Once the guest runs it completes or exits;
+native guest computation cannot be preempted. Each call pays the full interpreter start-up cost
+(several seconds), which is the reason `Server` exists.
 
-## Concurrency and lifecycle
+## Server (stay_open)
 
-- cmdMtx serializes Server.Command calls.
-- srvMtx protects lifecycle state and restart/close sequencing.
-- restartErr captures deferred startup failure reporting.
-- Each interpreter generation owns its module, WASI state, pipes, scanner, exit result and
-  completion channel. The evaluator captures only that generation and its arguments, never Server or
-  replacement state. It closes its guest pipe ends and clears module/WASI references before
-  publishing completion. No evaluator cleanup acquires Server's lifecycle mutex.
-- Directory and I/O restarts force-close the old generation, join its completion and only then
-  create a replacement. A failed replacement preserves the restart error without losing ownership of
-  a still-running old evaluator.
-- `Server.Shutdown` sends `-stay_open false`, closes stdin, joins the generation and releases its
-  stdout reader. EOF and failed server-owned host I/O use the existing `exitPanic` recovery path
-  rather than returning to the guest's warning/poll loop. This applies only to Server adapters;
-  one-shot I/O keeps its Reader/Writer semantics.
-- `Server.Close` marks the generation stopped and closes its pipes without joining. The next
-  server-owned host-I/O operation exits it, with completion ownership retained. Arbitrary native
-  guest computation cannot be preempted; orderly shutdown or restart may wait for that boundary.
-- Concurrent Command calls serialize. Callers must not race Close or Shutdown with a command;
-  repeated Close succeeds, while repeated Shutdown and commands after closure fail.
+`NewServer` builds argv
+`[Arg1] [-config Config] -stay_open true -@ - -common_args -echo4 {ready<boundary>} -charset filename=utf8 <commonArg...>`.
+It then starts a **generation**: a module, its `wasiState`, a `serverIO`, a stdout scanner, and an
+evaluator goroutine running `zeroperl_eval`. The goroutine recovers `exitPanic`, closes its pipe
+ends, drops its module references, and closes `evalDone`. It never touches `Server`.
 
-## Relevant files
+```mermaid
+sequenceDiagram
+  participant C as Caller
+  participant S as Server.Command
+  participant P as pipes (serverIO)
+  participant E as evaluator goroutine
+  C->>S: Command(args...)
+  S->>S: ensureOperandPreopens (restart if a new dir is needed)
+  S->>P: write argv lines + "-execute<boundary>"
+  P->>E: ExifTool reads -@ - from stdin
+  E->>P: stdout payload + "{ready<boundary>}"
+  E->>P: stderr diagnostics + "{ready<boundary>}" (-echo4)
+  S->>P: scan stdout frame (splitReadyToken)
+  S->>P: wait stderrReady, takeStderr
+  S-->>C: stdout, or error (stderr text / overflow)
+```
 
-| File               | Responsibility                                                 |
-| ------------------ | -------------------------------------------------------------- |
-| init.go            | package documentation, compatibility vars (Exec, Arg1, Config) |
-| exiftool.go        | module setup, buildModuleConfig, eval path                     |
-| operand_preopen.go | operand path resolution and Command writable preopen dirs      |
-| wasi.go            | wasiState wrapper overriding Xproc_exit                        |
-| io.go              | guestIO implementations                                        |
-| cmd.go             | Command and CommandContext                                     |
-| server.go          | stay_open server process model                                 |
-| decode.go          | Unmarshal helper for line-oriented ExifTool text output        |
-| cachefs.go         | internal cachedFS wrapper, cfsread integration                 |
+```mermaid
+stateDiagram-v2
+  [*] --> Running: NewServer / start()
+  Running --> Running: Command OK
+  Running --> Restarting: I/O failure, evaluator exit, or new operand dir
+  Restarting --> Running: forceStop, join evalDone, start()
+  Restarting --> Failed: start() error (restartErr)
+  Failed --> Failed: Command returns restartErr
+  Running --> Done: Shutdown (-stay_open false, join)
+  Running --> Done: Close (forceStop, no join)
+  Failed --> Done: Shutdown / Close
+  Done --> [*]
+```
 
-## Related references
+Concurrency and lifecycle rules:
 
-- README.md for usage and embed refresh process.
-- TESTING.md for build tags, local commands, and CI.
+- `cmdMtx` serializes `Command` and `Shutdown`; `srvMtx` guards `done`, `generation`, and restart.
+- A restart force-stops the old generation and **joins** its `evalDone` before starting the
+  replacement, so two evaluators never coexist.
+- Adding a writable preopen requires a new module, so a command naming a directory outside cwd and
+  temp that is not yet mounted triggers a full restart (interpreter start-up cost). Mounted
+  directories accumulate in `operandPreopens`.
+- `Shutdown` sends `-stay_open false`, closes stdin, and joins. `Close` marks the server done and
+  closes pipes without joining; the evaluator exits at its next host I/O call.
+- Callers must not race `Close`/`Shutdown` with an in-flight `Command`. Repeated `Close` succeeds;
+  repeated `Shutdown` and commands after either fail.
+
+## Tests and tooling
+
+See [TESTING.md](TESTING.md). Test kinds are separated by file suffix and build tag (`*_test.go`,
+`*_integration_test.go` with `integration`, `*_e2e_test.go` with `e2e`). CI runs the full set under
+`-race`; golangci-lint runs with both tags. The embedded tree is rebuilt with `dist.pl` and
+`cfsread-lz4` as described in [README.md](README.md).

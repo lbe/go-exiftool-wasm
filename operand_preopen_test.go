@@ -9,13 +9,13 @@ import (
 	"github.com/lbe/go-exiftool-wasm/internal/testutil"
 )
 
-func TestOperandPreopenDirs_U1_skipFlags(t *testing.T) {
+func TestOperandPreopenDirs_skipFlags(t *testing.T) {
 	t.Parallel()
 	got := operandPreopenDirs(t.TempDir(), []string{"-json", "-q"})
 	assertPreopenDirs(t, got, nil)
 }
 
-func TestOperandPreopenDirs_U2_skipRelativeUnderCwd(t *testing.T) {
+func TestOperandPreopenDirs_skipRelativeUnderCwd(t *testing.T) {
 	t.Parallel()
 	root := testutil.Root(t)
 	cwd := filepath.Join(root, "testdata")
@@ -23,13 +23,13 @@ func TestOperandPreopenDirs_U2_skipRelativeUnderCwd(t *testing.T) {
 	assertPreopenDirs(t, got, nil)
 }
 
-func TestOperandPreopenDirs_U3_absoluteFile(t *testing.T) {
+func TestOperandPreopenDirs_absoluteFile(t *testing.T) {
 	t.Parallel()
 	got := operandPreopenDirs(t.TempDir(), []string{"-json", "/Users/x/Pictures/a.jpg"})
 	assertPreopenDirs(t, got, []string{"/Users/x/Pictures"})
 }
 
-func TestOperandPreopenDirs_U4_relativeDotDot(t *testing.T) {
+func TestOperandPreopenDirs_relativeDotDot(t *testing.T) {
 	t.Parallel()
 	root := testutil.Root(t)
 	work := filepath.Join(root, "testdata", "dotdot", "work")
@@ -38,7 +38,7 @@ func TestOperandPreopenDirs_U4_relativeDotDot(t *testing.T) {
 	assertPreopenDirs(t, got, []string{outside})
 }
 
-func TestOperandPreopenDirs_U5_dedupSameParent(t *testing.T) {
+func TestOperandPreopenDirs_dedupSameParent(t *testing.T) {
 	t.Parallel()
 	got := operandPreopenDirs(t.TempDir(), []string{
 		"/Users/x/Pictures/a.jpg",
@@ -47,7 +47,7 @@ func TestOperandPreopenDirs_U5_dedupSameParent(t *testing.T) {
 	assertPreopenDirs(t, got, []string{"/Users/x/Pictures"})
 }
 
-func TestOperandPreopenDirs_U6_twoParents(t *testing.T) {
+func TestOperandPreopenDirs_twoParents(t *testing.T) {
 	t.Parallel()
 	got := operandPreopenDirs(t.TempDir(), []string{
 		"/Users/x/Pictures/a.jpg",
@@ -56,13 +56,13 @@ func TestOperandPreopenDirs_U6_twoParents(t *testing.T) {
 	assertPreopenDirs(t, got, []string{"/Users/x/Pictures", "/Users/x/Docs"})
 }
 
-func TestOperandPreopenDirs_U7_missingFileStillDerivesParent(t *testing.T) {
+func TestOperandPreopenDirs_missingFileStillDerivesParent(t *testing.T) {
 	t.Parallel()
 	got := operandPreopenDirs(t.TempDir(), []string{"/nonexistent/path/missing.jpg"})
 	assertPreopenDirs(t, got, []string{"/nonexistent/path"})
 }
 
-func TestOperandPreopenDirs_U8_directoryOperand(t *testing.T) {
+func TestOperandPreopenDirs_directoryOperand(t *testing.T) {
 	t.Parallel()
 	root := testutil.Root(t)
 	work := filepath.Join(root, "testdata", "dotdot", "work")
@@ -147,7 +147,7 @@ func assertPreopenDirs(t *testing.T, got, want []string) {
 	}
 }
 
-func TestV2METARepair_StructDoesNotConsumeOperand(t *testing.T) {
+func TestOperandPreopenDirs_structDoesNotConsumeOperand(t *testing.T) {
 	cwd := t.TempDir()
 	for _, args := range [][]string{
 		{"-json", "-G1", "-n", "-struct", "/outside/repair/photo.jpg"},

@@ -40,12 +40,12 @@ func repairSubprocess(t *testing.T, mode string) bool {
 	image := append(append(append([]byte{}, src[:2]...), segment...), packet...)
 	image = append(image, src[2:]...)
 	for _, dir := range []string{"storage/a", "other/b"} {
-		if err := os.WriteFile(filepath.Join(root, dir, "sample.jpg"), image, 0o600); err != nil {
+		if err = os.WriteFile(filepath.Join(root, dir, "sample.jpg"), image, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, link := range [][2]string{{"alias", "storage"}, {"alias2", "alias"}, {"storage/nested", "../other/b"}} {
-		if err := os.Symlink(link[1], filepath.Join(root, link[0])); err != nil {
+		if err = os.Symlink(link[1], filepath.Join(root, link[0])); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -94,7 +94,7 @@ func repairTags(t *testing.T, s *Server, path string) {
 	}
 }
 
-func TestV2METARepair_OriginalAliasesAndStruct(t *testing.T) {
+func TestServerSymlinkAliasesAndStruct(t *testing.T) {
 	if repairSubprocess(t, "aliases") {
 		return
 	}
@@ -114,7 +114,7 @@ func TestV2METARepair_OriginalAliasesAndStruct(t *testing.T) {
 	}
 }
 
-func TestV2METARepair_RemountStderrIdentity(t *testing.T) {
+func TestServerRemountStderrIdentity(t *testing.T) {
 	if repairSubprocess(t, "stderr-identity") {
 		return
 	}
@@ -136,7 +136,7 @@ func TestV2METARepair_RemountStderrIdentity(t *testing.T) {
 	}
 }
 
-func TestV2METARepair_StderrOverflowAndRecovery(t *testing.T) {
+func TestServerStderrOverflowAndRecovery(t *testing.T) {
 	if repairSubprocess(t, "stderr-overflow") {
 		return
 	}
@@ -147,7 +147,7 @@ func TestV2METARepair_StderrOverflowAndRecovery(t *testing.T) {
 	}
 	for i := 0; i < 20; i++ {
 		path := filepath.Join(os.Getenv("EXIFTOOL_REPAIR_ROOT"), "alias", "a", "missing.jpg")
-		_, err := s.Command("-q", "-q", "-b", "-XMP", path)
+		_, err = s.Command("-q", "-q", "-b", "-XMP", path)
 		if err == nil || !strings.Contains(err.Error(), "File not found - "+path) {
 			t.Errorf("failure %d: %v", i, err)
 		}
@@ -168,7 +168,7 @@ func TestV2METARepair_StderrOverflowAndRecovery(t *testing.T) {
 	}
 }
 
-func TestV2METARepair_OneShotOriginalAlias(t *testing.T) {
+func TestCommandSymlinkAlias(t *testing.T) {
 	if repairSubprocess(t, "oneshot") {
 		return
 	}
