@@ -5,10 +5,9 @@ import (
 	"io"
 )
 
-// guestIO abstracts guest stdio for the wasm2go-wasi-host layer. initWASIState
-// wires these methods into wasihost.ModuleConfig via WithStdin, WithStdout, and
-// WithStderr so single-shot Command and Server stay_open modes can use different
-// backends (in-memory buffers vs os.Pipe).
+// guestIO is the guest's stdio backend. initWASIState connects these methods to
+// the module's stdin, stdout and stderr. directIO serves one-shot commands with
+// in-memory buffers, and serverIO serves a Server with pipes.
 type guestIO interface {
 	ReadStdin(buf []byte) (int, error)
 	WriteStdout(buf []byte) (int, error)
@@ -17,16 +16,15 @@ type guestIO interface {
 	CloseAll()
 }
 
-// directIO buffers stdout and stderr in memory and reads stdin from an arbitrary
-// io.Reader. Used by single-shot Command/CommandContext.
+// directIO reads stdin from an io.Reader and keeps stdout and stderr in memory.
+// Command and CommandContext use it.
 type directIO struct {
 	StdinR  io.Reader
 	StdoutB *bytes.Buffer
 	StderrB *bytes.Buffer
 }
 
-// newDirectIO returns a directIO that reads from stdin. If stdin is nil,
-// reads immediately return (0, io.EOF).
+// newDirectIO returns a directIO that reads from stdin. A nil stdin reads as empty.
 func newDirectIO(stdin io.Reader) *directIO {
 	if stdin == nil {
 		stdin = bytes.NewReader(nil)
@@ -42,14 +40,14 @@ func (d *directIO) ReadStdin(buf []byte) (int, error)   { return d.StdinR.Read(b
 func (d *directIO) WriteStdout(buf []byte) (int, error) { return d.StdoutB.Write(buf) }
 func (d *directIO) WriteStderr(buf []byte) (int, error) { return d.StderrB.Write(buf) }
 
-// CloseStdin is a no-op; directIO does not own the stdin reader.
+// CloseStdin does nothing, because directIO does not own the reader.
 func (d *directIO) CloseStdin() {}
 
-// CloseAll is a no-op; directIO buffers are in-memory and need no cleanup.
+// CloseAll does nothing, because the buffers need no cleanup.
 func (d *directIO) CloseAll() {}
 
-// guestStdoutOnExit copies captured stdout from guestIO when the guest calls
-// proc_exit with a non-zero code.
+// guestStdoutOnExit returns a copy of the stdout a directIO captured, or nil for
+// any other backend. Callers use it after the guest exits with a non-zero status.
 func guestStdoutOnExit(gio guestIO) []byte {
 	dio, ok := gio.(*directIO)
 	if !ok {

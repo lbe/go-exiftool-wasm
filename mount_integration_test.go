@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// TestMountPreopenDoesNotAliasSplitMounts verifies that the writable /host
-// host-directory preopen does not resolve relative paths into the read-only
-// /lib and /bin mounts. Split preopens must stay isolated: embedded assets are
-// reachable only through their dedicated mount prefixes.
-func TestMountPreopenDoesNotAliasSplitMounts(t *testing.T) {
+// TestRelativePathsDoNotReachEmbeddedMounts verifies that relative paths resolve
+// against the host cwd, so bin/exiftool and lib/... do not reach the embedded
+// read-only /bin and /lib mounts. Embedded assets are reachable only through
+// their dedicated mount prefixes.
+func TestRelativePathsDoNotReachEmbeddedMounts(t *testing.T) {
 	if _, err := os.Stat("bin/exiftool"); err == nil {
 		t.Skip("host cwd contains bin/exiftool; split-preopen isolation cannot be verified")
 	}

@@ -100,6 +100,7 @@ func TestServerSymlinkAliasesAndStruct(t *testing.T) {
 	}
 	root := os.Getenv("EXIFTOOL_REPAIR_ROOT")
 	s := repairServer(t)
+	first := s.generation
 	for _, rel := range []string{"alias/a/sample.jpg", "alias2/a/sample.jpg", "alias/nested/sample.jpg", "storage/a/sample.jpg"} {
 		path := filepath.Join(root, rel)
 		// The tags command must discover its operand without a preceding raw command.
@@ -109,12 +110,15 @@ func TestServerSymlinkAliasesAndStruct(t *testing.T) {
 			t.Errorf("raw %s: got %q, err=%v", path, out, err)
 		}
 	}
+	if s.generation != first {
+		t.Error("symlinked directories restarted the server")
+	}
 	if err := s.Shutdown(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestServerRemountStderrIdentity(t *testing.T) {
+func TestServerStderrIdentityAfterStaleDiagnostics(t *testing.T) {
 	if repairSubprocess(t, "stderr-identity") {
 		return
 	}

@@ -1,51 +1,42 @@
-// Package exiftool runs ExifTool in-process via an embedded Perl interpreter
-// (zeroperl) compiled to native Go via wasm2go, using the external
-// github.com/lbe/wasm2go-wasi-host WASI implementation.
-// No external exiftool binary or Perl installation is required.
+// Package exiftool runs ExifTool in-process, with no exiftool binary and no Perl
+// installation. It embeds Perl and ExifTool as a WebAssembly module (zeroperl)
+// that wasm2go has translated to native Go, and github.com/lbe/wasm2go-wasi-host
+// implements the module's WASI system calls.
 //
-// The Perl stdlib and ExifTool script are embedded as LZ4-compressed files and
-// transparently decompressed on first read via an LRU cache.
+// # Files
 //
-// guest cwd is /host: Perl preamble in exiftoolEvalWrapper chdirs to hostWorkDir
-// before ExifTool runs, so relative paths resolve against the writable host working
-// directory mount rather than guest root /.
+// ExifTool sees the host filesystem at its real paths and can read and write any
+// file the calling process can. Its working directory is the process working
+// directory, so relative paths resolve as they do for a native exiftool. The
+// embedded Perl tree occupies /lib and /bin, and /dev holds only /dev/null, so
+// host files under those three directories are not reachable.
 //
-// Mount layout (assembled in buildModuleConfig via wasihost.NewModuleConfig):
-//   - "/host" ([hostWorkDir]): primary writable preopen for the caller's working directory
-//   - host cwd path aliases: additional writable preopens via registerHostDirPreopenAliases
-//   - "/lib": read-only FS (wasihost.WithReadOnlyFS) serving the embedded Perl tree
-//   - "/bin": read-only FS serving the ExifTool script
-//   - "/dev": read-only devNullFS for /dev/null
-//   - [os.TempDir]: writable preopen for ExifTool side effects
-//   - operand parent directories: writable preopens from [operandPreopenDirs] for file
-//     operands outside cwd and os.TempDir (Command only; see [commandWritableDirs]).
-//     Operand preopens are writable host mounts; only pass paths you intend ExifTool to access.
+// # Entry points
 //
-// Entry points:
-//   - [Command] / [CommandContext]: one-shot eval invocation; operand paths outside
-//     cwd/temp are preopened and rewritten to host-absolute paths before ExifTool runs.
-//   - [NewServer]: persistent ExifTool using the -stay_open protocol; amortises
-//     Perl startup across many [Server.Command] calls. After [NewServer] returns,
-//     call [Server.Shutdown] for graceful teardown. Use [Server.Close] to force-stop
-//     without waiting (for example if Perl is still initializing).
+// [Command] and [CommandContext] start a new interpreter for every call, which
+// takes several hundred milliseconds. [NewServer] starts one interpreter that
+// uses ExifTool's -stay_open protocol, and every [Server.Command] reuses it. Call
+// [Server.Shutdown] to stop a server and wait for it, or [Server.Close] to stop it
+// without waiting, for example while it is still starting.
 //
-// Configuration package variables [Arg1] and [Config] are forwarded into the
-// ExifTool argument list for [Command]/[CommandContext] and [NewServer]. [Exec]
-// is kept for API compatibility but is not used to spawn a process. Leave [Arg1]
-// empty unless you intend to pass a valid ExifTool option: it is prepended
-// verbatim and a mistaken value can be interpreted as a file argument.
+// # Configuration
 //
-// See ARCHITECTURE.md for mount layout, I/O model, and stay_open lifecycle details.
+// [Arg1] and [Config] add arguments to every command and server. [Exec] exists
+// for compatibility with github.com/ncruces/go-exiftool and is ignored.
+//
+// ARCHITECTURE.md in the repository describes the mount layout, the I/O model and
+// the stay_open lifecycle.
 package exiftool
 
-// Exec is retained for compatibility with the original go-exiftool API.
-// This implementation does not execute an external program; the value is ignored.
+// Exec is ignored. It exists for compatibility with github.com/ncruces/go-exiftool,
+// where it names the exiftool binary to run.
 var Exec = "exiftool"
 
-// Arg1, if non-empty, is prepended to every ExifTool argv built by [Command]/[CommandContext]
-// and by [NewServer]. It must be a valid ExifTool argument (for example a global option).
-// Do not set it to a host path unless that path is intended as an input file for ExifTool.
+// Arg1, if not empty, is the first argument of every command that [Command] and
+// [CommandContext] run and of every server that [NewServer] starts. Set it only to
+// a valid ExifTool option, because ExifTool treats any other value as a file name.
 var Arg1 string
 
-// Config, if non-empty, is passed as "-config" and the path value to ExifTool.
+// Config, if not empty, is passed to ExifTool as "-config" followed by Config,
+// after [Arg1].
 var Config string

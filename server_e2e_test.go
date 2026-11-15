@@ -628,11 +628,9 @@ func TestServerCommandAfterKill(t *testing.T) {
 	}
 	t.Logf("Before kill: %s", bytes.TrimSpace(out))
 
-	if killErr := e.cmd.Process.Kill(); killErr != nil {
+	proc := &processStub{server: e}
+	if killErr := proc.Kill(); killErr != nil {
 		t.Logf("Kill error: %v", killErr)
-	}
-	if releaseErr := e.cmd.Process.Release(); releaseErr != nil {
-		t.Logf("Release error: %v", releaseErr)
 	}
 
 	_, err = e.Command("-ver")

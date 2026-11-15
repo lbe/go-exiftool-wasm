@@ -1,11 +1,3 @@
-// cachefs.go provides cachedFS, an internal fs.FS implementation that wraps any underlying
-// fs.FS with transparent LZ4 decompression and LRU caching via github.com/lbe/cfsread.
-//
-// cachedFS is used by perlFS() to serve the embedded perl-wasi-prefix tree: the
-// embedded .pm files are stored LZ4-compressed in the binary, and cachedFS
-// decompresses them on first access and caches the result for subsequent reads.
-// Concurrent accesses to the same path are coalesced via singleflight so only
-// one goroutine performs I/O and decompression.
 package exiftool
 
 import (
@@ -22,10 +14,11 @@ import (
 	"github.com/lbe/cfsread/decompress/lz4"
 )
 
-// cachedFS wraps an underlying fs.FS with a cfsread.Reader that provides
-// magic-byte decompression (e.g., LZ4) and an LRU byte cache. It implements
-// fs.FS and is safe for concurrent use. Directories are passed through directly
-// to the underlying FS; regular files are served via the cfsread cache.
+// cachedFS is an fs.FS that serves regular files through a cfsread.Reader, which
+// decompresses LZ4 files and keeps the results in an LRU cache. Directories come
+// straight from the underlying FS. perlFS uses cachedFS for the embedded
+// perl-wasi-prefix tree. cfsread coalesces concurrent reads of the same path, so
+// one goroutine does the I/O and decompression. cachedFS is safe for concurrent use.
 type cachedFS struct {
 	reader     *cfsread.Reader
 	src        cfsread.Source
@@ -35,16 +28,12 @@ type cachedFS struct {
 	closed bool
 }
 
-// newCachedFS creates a new cachedFS that wraps underlying with a cfsread.Reader
-// configured by opts. id is the cache namespace for this source and must be
-// non-empty; it is used to isolate cache entries from other cachedFS instances.
+// newCachedFS returns a cachedFS over underlying, with a cfsread.Reader built from
+// opts. id names this source's cache namespace and must not be empty. newCachedFS
+// replaces opts.Registry with a registry that decodes LZ4.
 //
-// newCachedFS always configures a default registry with LZ4 support for
-// transparent decompression of the embedded perl-wasi-prefix tree.
-//
-// The caller owns the returned cachedFS and should call Close when done to
-// release the underlying cfsread.Reader. For process-lifetime singletons (such
-// as perlFS()), Close is not required.
+// Call Close to release the reader. An instance that lives as long as the process,
+// such as the one perlFS creates, does not need it.
 func newCachedFS(id string, underlying fs.FS, opts cfsread.Options) *cachedFS {
 	reg := decompress.NewRegistry()
 	if err := reg.Register(lz4.New()); err != nil {
@@ -59,15 +48,13 @@ func newCachedFS(id string, underlying fs.FS, opts cfsread.Options) *cachedFS {
 	}
 }
 
-// Open opens the named file or directory. If name refers to a directory in the
-// underlying FS, Open delegates to the underlying FS directly (cfsread handles
-// only regular files). For regular files, Open calls cfsread.Reader.Read using
-// context.Background() (the fs.FS interface does not accept a context); the
-// file bytes are decompressed if a matching decompressor is registered, then
-// cached. Subsequent Opens of the same name return cached bytes without I/O.
+// Open opens a directory from the underlying FS, because cfsread reads only regular
+// files. For a regular file it returns the cached contents, decompressed if a
+// registered decompressor matches; only the first Open of a name does I/O. Open
+// reads with context.Background, because fs.FS takes no context.
 //
-// Returns fs.ErrNotExist (wrapped in *fs.PathError) if the file does not exist,
-// and fs.ErrClosed (wrapped in *fs.PathError) after Close has been called.
+// Open returns an *fs.PathError wrapping fs.ErrNotExist for a missing file, and
+// one wrapping fs.ErrClosed after Close.
 func (c *cachedFS) Open(name string) (fs.File, error) {
 	c.mu.RLock()
 	closed := c.closed
@@ -76,29 +63,23 @@ func (c *cachedFS) Open(name string) (fs.File, error) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrClosed}
 	}
 
-	// Try to stat via underlying FS to determine if it's a file or directory
 	info, err := fs.Stat(c.underlying, name)
 	if err != nil {
-		// If not found, return the same error
 		return nil, err
 	}
 
 	if info.IsDir() {
-		// Delegate to underlying FS for directories
 		return c.underlying.Open(name)
 	}
 
-	// Regular file: use cfsread for caching and decompression
 	data, err := c.reader.Read(context.Background(), c.src, name)
 	if err != nil {
-		// Map to fs.ErrNotExist if appropriate
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 		}
 		return nil, err
 	}
 
-	// Build cachedFile with file info
 	fi := &cachedFileInfo{
 		name:    path.Base(name),
 		size:    int64(len(data)),
@@ -112,10 +93,8 @@ func (c *cachedFS) Open(name string) (fs.File, error) {
 	}, nil
 }
 
-// Close marks the cachedFS as closed and releases the underlying cfsread.Reader.
-// Subsequent Open calls on a closed cachedFS will return an error. It is safe to
-// call Close more than once. If Close is not called, the Reader remains live for
-// the process lifetime (acceptable for module-level singletons).
+// Close releases the cfsread.Reader. Later calls to Open fail with fs.ErrClosed.
+// Calling Close again does nothing and returns nil.
 func (c *cachedFS) Close() error {
 	c.mu.Lock()
 	if c.closed {
@@ -128,16 +107,15 @@ func (c *cachedFS) Close() error {
 	return c.reader.Close()
 }
 
-// cachedFile implements fs.File for a file whose contents have been read and
-// (optionally) decompressed by the cfsread.Reader. The byte slice is owned by
-// the cfsread cache and must not be mutated. Read is delegated to an embedded
-// bytes.Reader; Close is a no-op because the data lives in the cache.
+// cachedFile is an open file whose contents come from the cfsread cache. The
+// cache owns the bytes, so nothing may modify them. The embedded bytes.Reader
+// serves Read.
 type cachedFile struct {
 	*bytes.Reader
 	info fs.FileInfo
 }
 
-// Close is a no-op for cached files as they're backed by in-memory byte slices.
+// Close does nothing, because the data stays in the cache.
 func (c *cachedFile) Close() error {
 	return nil
 }
@@ -147,9 +125,8 @@ func (c *cachedFile) Stat() (fs.FileInfo, error) {
 	return c.info, nil
 }
 
-// cachedFileInfo implements fs.FileInfo for a cached file. Size reflects the
-// decompressed byte length. ModTime is taken from the underlying FS entry at
-// the time of the Open call.
+// cachedFileInfo describes a cached file. Size is the decompressed length, and
+// ModTime comes from the underlying FS when the file was opened.
 type cachedFileInfo struct {
 	name    string
 	size    int64

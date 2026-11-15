@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// SampleJPEG returns the path to testdata/sample.jpg relative to the module root.
+// SampleJPEG returns the absolute path of testdata/sample.jpg in the module root.
 func SampleJPEG(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(Root(t), "testdata", "sample.jpg")

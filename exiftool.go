@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,32 +17,40 @@ import (
 	wasihost "github.com/lbe/wasm2go-wasi-host"
 )
 
-// perlFSRoot holds the embedded perl-wasi-prefix tree (LZ4-compressed on disk).
-// Use [perlFS] to obtain an fs.FS with transparent decompression.
+// perlFSRoot is the embedded perl-wasi-prefix tree. Its files are LZ4-compressed;
+// read them through [perlFS], which decompresses them.
 //
 //go:embed all:embed/perl-wasi-prefix
 var perlFSRoot embed.FS
 
+// perlCachedFS is the cachedFS that perlFS creates once per process.
 var (
 	perlCachedFS     *cachedFS
 	perlCachedFSOnce sync.Once
 )
 
+// exiftoolScriptPath is the guest path of the embedded exiftool script.
 const exiftoolScriptPath = "/bin/exiftool"
 
-// Guest mount contract: the writable host working directory is always preopened at
-// hostWorkDir, never at guest root (/). Perl preamble chdirs to hostWorkDir before
-// ExifTool runs so relative paths resolve against that mount instead of /.
-const hostWorkDir = "/host"
+// exiftoolEvalWrapper returns the Perl program that runs ExifTool in the guest.
+// It turns on autoflush for STDOUT and STDERR, changes to cwd, adds the embedded
+// library directories to @INC, sets $0, and runs exiftoolScriptPath with do. It
+// dies if the script fails to compile or cannot be read.
+func exiftoolEvalWrapper(cwd string) string {
+	return "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); chdir " + perlQuote(cwd) + " or die $!; unshift @INC, '/lib/perl5', '/lib/perl5/wasm32-wasi'; $0 = '/bin/exiftool'; } my $ok = do '" + exiftoolScriptPath + "'; die $@ if $@; die $! if !defined $ok;\n"
+}
 
-// exiftoolEvalWrapper executes the embedded /bin/exiftool script via do().
-// It prepares autoflush, script name, @INC, and chdir to hostWorkDir for the perl-wasi-prefix tree.
-const exiftoolEvalWrapper = "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); chdir '" + hostWorkDir + "' or die $!; unshift @INC, '/lib/perl5', '/lib/perl5/wasm32-wasi'; $0 = '/bin/exiftool'; } my $ok = do '" + exiftoolScriptPath + "'; die $@ if $@; die $! if !defined $ok;\n"
+// perlQuote returns s as a Perl single-quoted string literal.
+func perlQuote(s string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s) + "'"
+}
 
-// devNullFS is a read-only fs.FS mounted at /dev via wasihost.WithReadOnlyFS.
-// It exposes a synthetic "null" file so guest opens of /dev/null succeed.
+// devNullFS is the read-only file system mounted at /dev. It holds one empty
+// file, null, so the guest can open /dev/null.
 type devNullFS struct{}
 
+// Open returns the root directory for ".", the null file for "null", and
+// fs.ErrNotExist for any other name.
 func (devNullFS) Open(name string) (fs.File, error) {
 	switch name {
 	case ".":
@@ -53,12 +62,15 @@ func (devNullFS) Open(name string) (fs.File, error) {
 	}
 }
 
-// devNullDir implements fs.File and fs.ReadDirFile for the devNullFS root.
+// devNullDir is the root directory of devNullFS. It implements fs.ReadDirFile.
 type devNullDir struct{ read bool }
 
 func (*devNullDir) Stat() (fs.FileInfo, error) { return devNullDirInfo{}, nil }
 func (*devNullDir) Read([]byte) (int, error)   { return 0, io.EOF }
 func (*devNullDir) Close() error               { return nil }
+
+// ReadDir returns the null entry on the first call and io.EOF after that. It
+// ignores n.
 func (d *devNullDir) ReadDir(n int) ([]fs.DirEntry, error) {
 	if d.read {
 		return nil, io.EOF
@@ -67,7 +79,7 @@ func (d *devNullDir) ReadDir(n int) ([]fs.DirEntry, error) {
 	return []fs.DirEntry{fs.FileInfoToDirEntry(devNullFileInfo{})}, nil
 }
 
-// devNullDirInfo implements fs.FileInfo for the devNullFS root directory.
+// devNullDirInfo describes the devNullFS root directory.
 type devNullDirInfo struct{}
 
 func (devNullDirInfo) Name() string       { return "." }
@@ -77,14 +89,14 @@ func (devNullDirInfo) ModTime() time.Time { return time.Time{} }
 func (devNullDirInfo) IsDir() bool        { return true }
 func (devNullDirInfo) Sys() any           { return nil }
 
-// devNullFile implements fs.File for the synthetic /dev/null entry.
+// devNullFile is the open /dev/null file. Reads return io.EOF.
 type devNullFile struct{}
 
 func (*devNullFile) Stat() (fs.FileInfo, error) { return devNullFileInfo{}, nil }
 func (*devNullFile) Read([]byte) (int, error)   { return 0, io.EOF }
 func (*devNullFile) Close() error               { return nil }
 
-// devNullFileInfo implements fs.FileInfo for the synthetic /dev/null entry.
+// devNullFileInfo describes /dev/null.
 type devNullFileInfo struct{}
 
 func (devNullFileInfo) Name() string       { return "null" }
@@ -94,12 +106,10 @@ func (devNullFileInfo) ModTime() time.Time { return time.Time{} }
 func (devNullFileInfo) IsDir() bool        { return false }
 func (devNullFileInfo) Sys() any           { return nil }
 
-// perlFS returns the process-level singleton cachedFS rooted at the embedded
-// perl-wasi-prefix directory. On first call the cachedFS is constructed with
-// a 2000-entry LRU; newCachedFS auto-registers LZ4 decompression support when
-// no registry is provided. Subsequent calls return the same instance.
-// The embedded tree is stored LZ4-compressed; perlFS transparently decompresses
-// files on first access and serves subsequent reads from the in-memory cache.
+// perlFS returns the process-wide cachedFS over the embedded perl-wasi-prefix
+// tree. The first call creates it with a 2000-entry LRU cache. cachedFS
+// decompresses each LZ4 file on its first read and serves later reads from the
+// cache. perlFS panics if the embedded tree is missing.
 func perlFS() fs.FS {
 	perlCachedFSOnce.Do(func() {
 		sub, err := fs.Sub(perlFSRoot, "embed/perl-wasi-prefix")
@@ -113,9 +123,8 @@ func perlFS() fs.FS {
 	return perlCachedFS
 }
 
-// commandArgs builds the full ExifTool argument list by prepending the
-// package-level [Arg1] and [Config] variables and appending a UTF-8 charset
-// flag, followed by the caller-supplied args.
+// commandArgs returns the argv for a one-shot command: [Arg1] and [Config] if
+// set, then "-charset filename=utf8", then arg.
 func commandArgs(arg []string) []string {
 	args := packageArgs()
 	args = append(args, "-charset", "filename=utf8")
@@ -123,7 +132,7 @@ func commandArgs(arg []string) []string {
 	return args
 }
 
-// packageArgs returns argv prefix from package-level [Arg1] and [Config].
+// packageArgs returns the arguments that [Arg1] and [Config] contribute.
 func packageArgs() []string {
 	var args []string
 	if Arg1 != "" {
@@ -135,63 +144,35 @@ func packageArgs() []string {
 	return args
 }
 
-// hostDirPreopenGuestPaths returns guest-side absolute path spellings that must map
-// to the same host directory preopen. filepath.EvalSymlinks may resolve hostDir to a
-// different spelling (for example /var vs /private/var on macOS); every spelling
-// needs a wasihost.WithHostDirectoryPreopen alias so WASI path_open resolves
-// through the same writable mount.
-func hostDirPreopenGuestPaths(hostDir string) []string {
-	paths := []string{hostDir}
-	symlinkResolved, err := filepath.EvalSymlinks(hostDir)
-	if err != nil || symlinkResolved == hostDir {
-		return paths
-	}
-	return append(paths, symlinkResolved)
-}
-
-// registerHostDirPreopenAliases adds a writable preopen for every spelling
-// returned by [hostDirPreopenGuestPaths], each via wasihost.WithHostDirectoryPreopen.
-func registerHostDirPreopenAliases(moduleCfg *wasihost.ModuleConfig, hostDir string) *wasihost.ModuleConfig {
-	for _, guestPath := range hostDirPreopenGuestPaths(hostDir) {
-		moduleCfg = moduleCfg.WithHostDirectoryPreopen(guestPath, hostDir)
-	}
-	return moduleCfg
-}
-
-// buildModuleConfig assembles a wasihost.ModuleConfig for a zeroperl guest.
+// buildModuleConfig returns the WASI configuration for a zeroperl guest. It
+// mounts:
+//   - "/": a writable preopen of host "/", so a guest path is the host path
+//   - "/lib" and "/bin": libFS and binFS, read-only; they hide the host
+//     directories with the same names
+//   - "/dev": devNullFS, read-only
+//   - "/work": workFS, read-only, if workFS is not nil
 //
-// Mount layout:
-//   - [hostWorkDir]: primary writable preopen for host cwd (never guest /)
-//   - /lib, /bin: read-only FS mounts (wasihost.WithReadOnlyFS) over embedded Perl tree
-//   - /dev: synthetic /dev/null (read-only FS)
-//   - /work: optional read-only workFS
-//   - host cwd aliases, os.TempDir, and operand dirs: writable preopens via registerHostDirPreopenAliases
-//
-// Also enables wall/nano clocks, nanosleep, and crypto/rand for WASI syscalls.
-func buildModuleConfig(cwd string, libFS, binFS fs.FS, workFS fs.FS, writableDirs []string) *wasihost.ModuleConfig {
+// It also enables the wall and monotonic clocks, nanosleep and crypto/rand.
+func buildModuleConfig(libFS, binFS fs.FS, workFS fs.FS) *wasihost.ModuleConfig {
 	moduleCfg := wasihost.NewModuleConfig().
 		WithReadOnlyFS("/lib", libFS).
 		WithReadOnlyFS("/bin", binFS).
-		WithHostDirectoryPreopen(hostWorkDir, cwd).
+		WithHostDirectoryPreopen("/", "/").
 		WithReadOnlyFS("/dev", devNullFS{}).
 		WithSysWalltime().
 		WithSysNanotime().
 		WithSysNanosleep().
 		WithRandSource(rand.Reader)
 
-	moduleCfg = registerHostDirPreopenAliases(moduleCfg, cwd)
 	if workFS != nil {
 		moduleCfg = moduleCfg.WithReadOnlyFS("/work", workFS)
-	}
-	for _, dir := range writableDirs {
-		moduleCfg = registerHostDirPreopenAliases(moduleCfg, dir)
 	}
 	return moduleCfg
 }
 
-// newModuleAt creates a zeroperl module using the supplied cwd for the /host
-// preopen so it matches operand resolution in [commandEvalModule].
-func newModuleAt(gio guestIO, cwd string, workFS fs.FS, writableDirs []string) (*wasm2go.Module, *wasiState, error) {
+// newModuleAt creates and initializes a zeroperl module that uses gio for stdio.
+// Its Perl wrapper changes the guest to cwd before ExifTool runs.
+func newModuleAt(gio guestIO, cwd string, workFS fs.FS) (*wasm2go.Module, *wasiState, error) {
 	cwd = filepath.Clean(cwd)
 	libFS, err := fs.Sub(perlFS(), "lib")
 	if err != nil {
@@ -202,19 +183,18 @@ func newModuleAt(gio guestIO, cwd string, workFS fs.FS, writableDirs []string) (
 		return nil, nil, fmt.Errorf("exiftool: sub bin: %w", err)
 	}
 
-	ws := &wasiState{}
+	ws := &wasiState{cwd: cwd}
 	mod := wasm2go.New(ws, ws)
-	initWASIState(ws, mod, gio, buildModuleConfig(cwd, libFS, binFS, workFS, writableDirs))
+	initWASIState(ws, mod, gio, buildModuleConfig(libFS, binFS, workFS))
 
 	mod.X_initialize()
 
 	return mod, ws, nil
 }
 
-// initModule calls Xzeroperl_init on the module and converts any non-zero
-// return or proc_exit panic into a Go error. On failure the provided pipe
-// closers are released and the caller should not attempt to use them. On
-// success the caller retains ownership of all resources.
+// initModule runs Xzeroperl_init and returns an error for a non-zero return, a
+// non-zero proc_exit or any other panic. After a non-zero return or exit it has
+// closed sio.stdinR and sio.stdoutW. The caller still owns everything else.
 func initModule(mod *wasm2go.Module, sio *serverIO) error {
 	err := func() (initErr error) {
 		defer func() {
@@ -239,18 +219,15 @@ func initModule(mod *wasm2go.Module, sio *serverIO) error {
 	return err
 }
 
-// evalModule initialises the Perl interpreter inside the module, loads the
-// ExifTool script into guest memory, and evaluates it with the given
-// arguments. When the guest calls proc_exit(0) the captured stdout content is
-// returned; a non-zero exit code produces an error wrapping any stderr output.
+// evalModule runs Xzeroperl_init, then runs ExifTool with args through
+// exiftoolEvalWrapper, and returns the stdout a directIO captured. The guest
+// exits through proc_exit, which panics with exitPanic, and evalModule recovers
+// it. Exit 0 returns stdout. A non-zero exit returns stdout and an *ExitError
+// whose Msg includes stderr. Any other panic propagates.
 //
-// proc_exit panics are recovered here as exitPanic (see wasiState.Xproc_exit).
-// The Server path in server.go calls initModule separately and invokes
-// Xzeroperl_eval in a background goroutine with its own recover (bypassing
-// this function) so the interpreter stays alive across multiple commands.
-//
-// Note: this function calls Xzeroperl_init internally, which is appropriate for
-// the single-shot Command path only.
+// Only the one-shot path uses evalModule. A Server calls initModule and runs
+// Xzeroperl_eval in its own goroutine (see evaluateServerModule), so its
+// interpreter stays alive between commands.
 func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -284,7 +261,7 @@ func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []by
 	}
 
 	mem := ws.mem()
-	wrapper := []byte(exiftoolEvalWrapper)
+	wrapper := []byte(exiftoolEvalWrapper(ws.cwd))
 	scriptPtr := mod.Xmalloc(int32(len(wrapper) + 1))
 	copy(mem[scriptPtr:], wrapper)
 	mem[scriptPtr+int32(len(wrapper))] = 0

@@ -9,13 +9,12 @@ import (
 	"testing"
 )
 
-// TestCommand_tagsFromFile verifies that Command can copy metadata between files
-// under the process working directory using -tagsFromFile -overwrite_original.
-// Both src and dst are relative paths so the WASI sandbox hostRoot join resolves
-// them correctly without absolute-path ambiguity.
+// TestCommand_tagsFromFile verifies that Command copies metadata between two files
+// given as paths relative to the working directory, with -tagsFromFile and
+// -overwrite_original.
 func TestCommand_tagsFromFile(t *testing.T) {
-	// Arrange: create a temp subdir under CWD; copy test.jpg there as dst.
-	// Relative paths are used throughout so filepath.Join(cwd, rel) is correct.
+	// Arrange: copy test.jpg to dst in a temporary directory under the working
+	// directory.
 	tmpDir, err := os.MkdirTemp(".", "write_test_*")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
@@ -34,11 +33,11 @@ func TestCommand_tagsFromFile(t *testing.T) {
 	}
 
 	// Act: -tagsFromFile copies metadata; -overwrite_original rewrites dst in-place.
-	// -m suppresses minor ExifTool errors (e.g., IPTC length truncation).
+	// -m suppresses minor ExifTool errors, such as IPTC length truncation.
 	out, err := Command(nil, "-m", "-tagsFromFile", srcRel, "-overwrite_original", dstRel)
 
-	// Assert: allow non-fatal ExifTool warnings (e.g., IPTC digest mismatch) which
-	// appear in stderr but do not indicate a write failure.
+	// Assert: allow ExifTool warnings, such as an IPTC digest mismatch. They
+	// appear in stderr but do not mean the write failed.
 	if err != nil && !strings.Contains(err.Error(), "Warning:") {
 		t.Fatalf("Command: %v\noutput: %s", err, out)
 	}

@@ -10,10 +10,11 @@ import (
 	"github.com/lbe/cfsread"
 )
 
-// TestCachedFSIntegration is an end-to-end test that exercises cachedFS with
-// the real embedded perlFSRoot. It verifies that:
-//  1. LZ4-compressed Carp.pm decompresses to valid Perl (starts with "package Carp").
-//  2. A second read of the same file results in a cache hit (verified via testMetrics).
+// TestCachedFSIntegration reads through cachedFS from the real embedded
+// perlFSRoot. It checks that:
+//  1. The LZ4-compressed Carp.pm decompresses to Perl source that starts with
+//     "package Carp".
+//  2. A second read of the same file is a cache hit, as testMetrics records.
 func TestCachedFSIntegration(t *testing.T) {
 	// Check if embed assets are compressed
 	subFS, err := fs.Sub(perlFSRoot, "embed/perl-wasi-prefix")

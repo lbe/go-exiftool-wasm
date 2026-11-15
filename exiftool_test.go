@@ -89,3 +89,17 @@ func TestCommandArgsWithBoth(t *testing.T) {
 		t.Errorf("expected -config in args, got %v", args)
 	}
 }
+
+func TestPerlQuote(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"/home/u", `'/home/u'`},
+		{"it's", `'it\'s'`},
+		{`a\b`, `'a\\b'`},
+		{`a\'`, `'a\\\''`},
+	}
+	for _, tt := range tests {
+		if got := perlQuote(tt.in); got != tt.want {
+			t.Errorf("perlQuote(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

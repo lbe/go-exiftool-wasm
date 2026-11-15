@@ -9,7 +9,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Category 1: Cold Start (full lifecycle inside b.N loop)
+// Category 1: cold start (full lifecycle inside the b.N loop)
 // ---------------------------------------------------------------------------
 
 // BenchmarkCommand_Version measures the full cold-start cost of a single-shot
@@ -39,7 +39,7 @@ func BenchmarkNewServer(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
-// Category 2: Warm Server Operations (server created once)
+// Category 2: warm server (one server for all iterations)
 // ---------------------------------------------------------------------------
 
 // BenchmarkServerCommand_Version measures a warm-server version query.
@@ -123,7 +123,7 @@ func BenchmarkServerCommand_MultipleFiles(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
-// Category 3: Single-shot File Reading (full lifecycle inside b.N loop)
+// Category 3: one-shot file reads (full lifecycle inside the b.N loop)
 // ---------------------------------------------------------------------------
 
 // BenchmarkCommand_ReadTags reads specific tags via single-shot Command.
@@ -157,7 +157,7 @@ func BenchmarkCommand_JSON(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
-// Category 4: stdin Image Streaming
+// Category 4: image bytes on stdin
 // ---------------------------------------------------------------------------
 
 // BenchmarkCommand_StdinImage pipes image bytes via stdin for JSON extraction.
@@ -224,7 +224,7 @@ func BenchmarkServer_TempFileImage(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
-// Category 5: Throughput Comparison
+// Category 5: throughput comparison
 // ---------------------------------------------------------------------------
 
 // BenchmarkCommand_SequentialVersion runs N cold-start version queries.
@@ -280,7 +280,7 @@ func BenchmarkServer_SequentialRead(b *testing.B) {
 }
 
 // ---------------------------------------------------------------------------
-// Category 6: File Size / Type Variation (warm server, -json)
+// Category 6: file size and type (warm server)
 // ---------------------------------------------------------------------------
 
 // BenchmarkServerCommand_SmallJPG reads a 203B JPEG via warm server.
@@ -363,6 +363,8 @@ func BenchmarkServerCommand_TIFF(b *testing.B) {
 	}
 }
 
+// BenchmarkServerCommand_MediumJPG_AllTags prints all tags of a 3.5KB JPEG as
+// text via a warm server.
 func BenchmarkServerCommand_MediumJPG_AllTags(b *testing.B) {
 	e, err := NewServer()
 	if err != nil {
@@ -378,7 +380,8 @@ func BenchmarkServerCommand_MediumJPG_AllTags(b *testing.B) {
 	}
 }
 
-// BenchmarkServerCommand_LargeJPG reads a 133KB JPEG via warm server.
+// BenchmarkServerCommand_LargeJPG_AllTags prints all tags of a 133KB JPEG as
+// text via a warm server.
 func BenchmarkServerCommand_LargeJPG_AllTags(b *testing.B) {
 	e, err := NewServer()
 	if err != nil {
@@ -394,7 +397,8 @@ func BenchmarkServerCommand_LargeJPG_AllTags(b *testing.B) {
 	}
 }
 
-// BenchmarkServerCommand_PNG reads a 284B PNG via warm server.
+// BenchmarkServerCommand_PNG_AllTags prints all tags of a 284B PNG as text via
+// a warm server.
 func BenchmarkServerCommand_PNG_AllTags(b *testing.B) {
 	e, err := NewServer()
 	if err != nil {
@@ -410,7 +414,8 @@ func BenchmarkServerCommand_PNG_AllTags(b *testing.B) {
 	}
 }
 
-// BenchmarkServerCommand_TIFF reads a 60KB TIFF via warm server.
+// BenchmarkServerCommand_TIFF_AllTags prints all tags of a 60KB TIFF as text via
+// a warm server.
 func BenchmarkServerCommand_TIFF_AllTags(b *testing.B) {
 	e, err := NewServer()
 	if err != nil {

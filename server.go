@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -19,45 +18,33 @@ import (
 const boundary = "1854673209"
 
 const (
-	stayOpenScannerInitBuf = 64 * 1024
-	maxStayOpenStdoutToken = 1024 * 1024
-	maxServerStderrPayload = 64 * 1024
-	stderrFramingToken     = "{ready" + boundary + "}\n"
+	stayOpenScannerInitBuf = 64 * 1024                   // initial stdout scanner buffer
+	maxStayOpenStdoutToken = 1024 * 1024                 // largest stdout response
+	maxServerStderrPayload = 64 * 1024                   // stderr kept per command
+	stderrFramingToken     = "{ready" + boundary + "}\n" // -echo4 line that ends a command's stderr
 )
 
+// readyFramingToken marks the end of a command's stdout.
 var readyFramingToken = []byte("{ready" + boundary + "}")
 
-type processStub struct{ server *Server }
-
-func (p *processStub) Kill() error {
-	if p.server.generation != nil && p.server.generation.stdinW != nil {
-		return p.server.generation.stdinW.Close()
-	}
-	return nil
-}
-
-func (p *processStub) Release() error { return nil }
-
-type cmdStub struct{ Process *processStub }
-
-// Server is a persistent, in-process ExifTool instance using the -stay_open
-// protocol. Command calls serialize. Do not call Close or Shutdown concurrently
-// with an in-flight Command. Use Shutdown for an orderly join or Close to stop
-// at the next host-I/O boundary without waiting for native guest computation.
+// Server is one ExifTool interpreter that keeps running between commands, using
+// ExifTool's -stay_open protocol. Commands run one at a time. Do not call
+// [Server.Close] or [Server.Shutdown] while a [Server.Command] is running.
+// Shutdown stops the interpreter and waits for it. Close stops it at its next
+// host I/O call and returns without waiting.
 type Server struct {
-	srvMtx          sync.Mutex
-	cmdMtx          sync.Mutex
-	args            []string
-	cwd             string
-	done            bool
-	cmd             *cmdStub
-	restartErr      error
-	operandPreopens []string
-	generation      *serverGeneration
+	srvMtx     sync.Mutex // guards done, generation and restarts
+	cmdMtx     sync.Mutex // serializes Command and Shutdown
+	args       []string   // startup argv for every generation
+	cwd        string     // host working directory for every generation
+	done       bool       // set by Close or Shutdown
+	restartErr error      // error from the last failed restart
+	generation *serverGeneration
 }
 
-// serverGeneration owns everything an evaluator can access. Its evaluator never
-// refers back to Server, and publishes its result by closing evalDone.
+// serverGeneration holds one interpreter and everything its evaluator can reach.
+// A restart replaces the whole generation. The evaluator never refers back to
+// Server, and it reports its result by closing evalDone.
 type serverGeneration struct {
 	mod      *wasm2go.Module
 	wasi     *wasiState
@@ -69,8 +56,10 @@ type serverGeneration struct {
 	evalErr  error
 }
 
-// serverIO keeps stderr payload bounded while independently recognizing framing,
-// including frames split across writes or arriving after payload overflow.
+// serverIO is the stdio backend for a Server. Stdin and stdout are pipes. Stderr
+// goes to a buffer capped at maxServerStderrPayload, and WriteStderr separately
+// watches for stderrFramingToken, which ends each command's stderr. It finds the
+// token even when a write splits it or the buffer has overflowed.
 type serverIO struct {
 	stdinR         *os.File
 	stdinW         *os.File
@@ -85,6 +74,7 @@ type serverIO struct {
 	stderrReady    chan struct{}
 }
 
+// newServerIO creates the stdin and stdout pipes.
 func newServerIO() (*serverIO, error) {
 	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
@@ -105,6 +95,8 @@ func newServerIO() (*serverIO, error) {
 func (s *serverIO) ReadStdin(buf []byte) (int, error)   { return s.stdinR.Read(buf) }
 func (s *serverIO) WriteStdout(buf []byte) (int, error) { return s.stdoutW.Write(buf) }
 
+// appendStderr adds b to the stderr buffer, or records an overflow if the buffer
+// is full. The caller holds stderrMu.
 func (s *serverIO) appendStderr(b byte) {
 	if s.stderrB.Len() < maxServerStderrPayload {
 		_ = s.stderrB.WriteByte(b)
@@ -113,6 +105,9 @@ func (s *serverIO) appendStderr(b byte) {
 	}
 }
 
+// WriteStderr stores guest stderr and signals stderrReady when it sees
+// stderrFramingToken. Bytes that could start the token wait in stderrPending
+// until they either complete it or stop matching.
 func (s *serverIO) WriteStderr(buf []byte) (int, error) {
 	s.stderrMu.Lock()
 	defer s.stderrMu.Unlock()
@@ -135,13 +130,17 @@ func (s *serverIO) WriteStderr(buf []byte) (int, error) {
 	return len(buf), nil
 }
 
+// CloseStdin closes the guest's read end of stdin.
 func (s *serverIO) CloseStdin() { _ = s.stdinR.Close() }
 
+// CloseAll marks the backend stopped and closes the guest's ends of both pipes.
 func (s *serverIO) CloseAll() {
 	s.stopped.Store(true)
 	_ = closeAll(s.stdinR, s.stdoutW)
 }
 
+// takeStderr returns a copy of the stderr buffer from offset from, reports
+// whether it overflowed, and then clears both.
 func (s *serverIO) takeStderr(from int) ([]byte, bool) {
 	s.stderrMu.Lock()
 	defer s.stderrMu.Unlock()
@@ -159,11 +158,7 @@ func (s *serverIO) takeStderr(from int) ([]byte, bool) {
 	return result, overflow
 }
 
-func (s *serverIO) DrainStderr(from int) []byte {
-	data, _ := s.takeStderr(from)
-	return data
-}
-
+// closeAll closes every closer and joins their errors.
 func closeAll(closers ...io.Closer) error {
 	var errs []error
 	for _, c := range closers {
@@ -174,11 +169,13 @@ func closeAll(closers ...io.Closer) error {
 	return errors.Join(errs...)
 }
 
-// NewServer starts a persistent ExifTool interpreter. commonArg is prepended to
-// commands, along with package-level Arg1 and Config. Call Shutdown after use.
+// NewServer starts an interpreter that runs ExifTool with -stay_open. Its startup
+// arguments are [Arg1] and [Config] if set, then the stay_open options, then
+// commonArg after -common_args, so ExifTool applies commonArg to every command.
+// Relative paths in later commands resolve against the working directory at the
+// time of this call. Call [Server.Shutdown] or [Server.Close] when done.
 func NewServer(commonArg ...string) (*Server, error) {
 	e := &Server{}
-	e.cmd = &cmdStub{Process: &processStub{server: e}}
 	if Arg1 != "" {
 		e.args = append(e.args, Arg1)
 	}
@@ -194,6 +191,8 @@ func NewServer(commonArg ...string) (*Server, error) {
 	return e, nil
 }
 
+// start creates a generation and starts its evaluator goroutine. The first call
+// records the working directory, and restarts reuse it.
 func (e *Server) start() error {
 	sio, err := newServerIO()
 	if err != nil {
@@ -206,7 +205,7 @@ func (e *Server) start() error {
 			return fmt.Errorf("exiftool: getwd: %w", err)
 		}
 	}
-	mod, ws, err := newModuleAt(sio, e.cwd, nil, serverWritableDirs(e.cwd, e.operandPreopens))
+	mod, ws, err := newModuleAt(sio, e.cwd, nil)
 	if err != nil {
 		_ = closeAll(sio.stdinR, sio.stdinW, sio.stdoutR, sio.stdoutW)
 		return fmt.Errorf("failed to create module: %w", err)
@@ -244,9 +243,12 @@ func (e *Server) start() error {
 	return nil
 }
 
+// evaluateServerModule copies the wrapper and args into guest memory and runs
+// ExifTool. It returns when ExifTool leaves the stay_open loop; the caller
+// recovers exitPanic.
 func evaluateServerModule(mod *wasm2go.Module, ws *wasiState, args []string) {
 	mem := ws.mem()
-	wrapper := []byte(exiftoolEvalWrapper)
+	wrapper := []byte(exiftoolEvalWrapper(ws.cwd))
 	scriptPtr := mod.Xmalloc(int32(len(wrapper) + 1))
 	copy(mem[scriptPtr:], wrapper)
 	mem[scriptPtr+int32(len(wrapper))] = 0
@@ -273,12 +275,17 @@ func evaluateServerModule(mod *wasm2go.Module, ws *wasiState, args []string) {
 	mod.Xzeroperl_eval(scriptPtr, 0, int32(len(args)), argvPtr)
 }
 
+// forceStop closes the generation's pipes so its evaluator exits at its next host
+// I/O call. It does not wait.
 func (g *serverGeneration) forceStop() {
 	g.sio.CloseAll()
 	_ = g.stdinW.Close()
 	_ = g.stdoutR.Close()
 }
 
+// restart stops the current generation, waits for its evaluator to exit, and
+// starts a new one. It stores any start error in restartErr. After Close or
+// Shutdown it does nothing.
 func (e *Server) restart() {
 	e.srvMtx.Lock()
 	defer e.srvMtx.Unlock()
@@ -293,9 +300,14 @@ func (e *Server) restart() {
 	e.restartErr = e.start()
 }
 
-// Command sends one serialized command and waits for both response frames.
-// Diagnostics are drained per command; overflow is an explicit error. I/O
-// failures join the old evaluator before starting a replacement.
+// Command sends arg to ExifTool as one command and returns its stdout. Calls run
+// one at a time.
+//
+// If ExifTool writes anything to stderr, Command returns an error that holds the
+// text, and no stdout. If the stderr text exceeds 64 KiB, the error reports the
+// overflow, and later commands still work. If a pipe fails or the interpreter
+// exits, Command restarts the interpreter before it returns the error. If that
+// restart fails, every later call returns the restart error.
 func (e *Server) Command(arg ...string) ([]byte, error) {
 	e.cmdMtx.Lock()
 	defer e.cmdMtx.Unlock()
@@ -308,15 +320,10 @@ func (e *Server) Command(arg ...string) ([]byte, error) {
 	if err := e.restartErr; err != nil {
 		return nil, fmt.Errorf("server had a previous restart error: %w", err)
 	}
-	scanArgs := append(append([]string{}, packageArgs()...), arg...)
-	if err := e.ensureOperandPreopens(commandWritableDirs(e.cwd, scanArgs)); err != nil {
-		return nil, err
-	}
 	g := e.generation
-	// Any preceding diagnostics belong to this generation, never an old offset.
+	// Drop stderr left over from earlier activity in this generation.
 	_, _ = g.sio.takeStderr(0)
-	argv := guestOperandPaths(e.cwd, arg)
-	for _, a := range argv {
+	for _, a := range arg {
 		if _, err := fmt.Fprintf(g.stdinW, "%s\n", a); err != nil {
 			e.restart()
 			return nil, err
@@ -359,9 +366,10 @@ func (e *Server) Command(arg ...string) ([]byte, error) {
 	return append([]byte(nil), g.stdout.Bytes()...), nil
 }
 
-// Close force-closes the current generation's pipes without waiting for native
-// computation. Its next server-owned host-I/O operation exits the evaluator.
-// Close is idempotent; callers must not race it with Command or Shutdown.
+// Close stops the server without waiting. It closes the pipes, and the
+// interpreter exits at its next host I/O call; Close cannot interrupt guest code
+// while it computes. Calling Close again does nothing. Do not call it while a
+// Command or Shutdown is running.
 func (e *Server) Close() error {
 	e.srvMtx.Lock()
 	defer e.srvMtx.Unlock()
@@ -374,9 +382,10 @@ func (e *Server) Close() error {
 	return nil
 }
 
-// Shutdown sends -stay_open false, closes stdin and joins its generation before
-// releasing resources. Native computation may delay the next host-I/O boundary.
-// Repeated Shutdown and commands after either shutdown method return an error.
+// Shutdown asks ExifTool to exit with -stay_open false, closes stdin, and waits
+// for the interpreter to exit. Guest code that is still computing delays it.
+// Shutdown returns an error if Close or Shutdown already ran, and so does every
+// Command after either one.
 func (e *Server) Shutdown() error {
 	e.cmdMtx.Lock()
 	defer e.cmdMtx.Unlock()
@@ -401,6 +410,8 @@ func (e *Server) Shutdown() error {
 	return errors.Join(writeErr, closeErr)
 }
 
+// newStayOpenStdoutScanner returns a scanner that splits stdout at each ready
+// token and accepts responses up to maxStayOpenStdoutToken bytes.
 func newStayOpenStdoutScanner(r io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, stayOpenScannerInitBuf), maxStayOpenStdoutToken)
@@ -408,6 +419,8 @@ func newStayOpenStdoutScanner(r io.Reader) *bufio.Scanner {
 	return scanner
 }
 
+// splitReadyToken is a bufio.SplitFunc. Each token is the output before
+// readyFramingToken, and the split consumes the rest of the token's line.
 func splitReadyToken(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if i := bytes.Index(data, readyFramingToken); i >= 0 {
 		if n := bytes.IndexByte(data[i:], '\n'); n >= 0 {
@@ -421,38 +434,4 @@ func splitReadyToken(data []byte, atEOF bool) (advance int, token []byte, err er
 		return 0, data, io.EOF
 	}
 	return 0, nil, nil
-}
-
-func serverWritableDirs(cwd string, operandPreopens []string) []string {
-	return append([]string{os.TempDir()}, operandPreopens...)
-}
-
-func neededOperandPreopens(cwd string, writableDirs []string) []string {
-	tempDir := filepath.Clean(os.TempDir())
-	var out []string
-	for _, d := range writableDirs {
-		d = filepath.Clean(d)
-		if d == tempDir || pathWithinDir(d, cwd) {
-			continue
-		}
-		out = append(out, d)
-	}
-	return out
-}
-
-func (e *Server) ensureOperandPreopens(writableDirs []string) error {
-	need := neededOperandPreopens(e.cwd, writableDirs)
-	if len(need) == 0 {
-		return nil
-	}
-	merged, changed := mergePreopenDirLists(e.operandPreopens, need)
-	if !changed {
-		return nil
-	}
-	e.operandPreopens = merged
-	e.restart()
-	if e.restartErr != nil {
-		return fmt.Errorf("exiftool: remount operand dirs: %w", e.restartErr)
-	}
-	return nil
 }

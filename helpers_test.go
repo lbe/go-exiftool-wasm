@@ -196,10 +196,6 @@ func TestProcessStubKill(t *testing.T) {
 			t.Fatalf("Kill error = %v, want %v", err, wantErr)
 		}
 	})
-
-	if err := (&processStub{}).Release(); err != nil {
-		t.Fatalf("Release failed: %v", err)
-	}
 }
 
 func TestServerIOHelpers(t *testing.T) {
@@ -300,13 +296,20 @@ func TestJSONRecordsExitCode(t *testing.T) {
 	}
 }
 
-func TestUsesEvalModulePath(t *testing.T) {
-	t.Parallel()
+// processStub stands in for the *os.Process of an exec-based server, so tests
+// can simulate the interpreter process dying.
+type processStub struct{ server *Server }
 
-	if !usesEvalModulePath(strings.NewReader("-ver\n"), []string{"-@", "-"}) {
-		t.Error("expected true for -@ - with stdin")
+// Kill closes the current generation's stdin, which makes its evaluator exit.
+func (p *processStub) Kill() error {
+	if p.server.generation != nil && p.server.generation.stdinW != nil {
+		return p.server.generation.stdinW.Close()
 	}
-	if usesEvalModulePath(nil, []string{"-json", "file.jpg"}) {
-		t.Error("expected false for normal args")
-	}
+	return nil
+}
+
+// DrainStderr returns takeStderr's data and drops the overflow flag.
+func (s *serverIO) DrainStderr(from int) []byte {
+	data, _ := s.takeStderr(from)
+	return data
 }

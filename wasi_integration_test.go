@@ -168,7 +168,7 @@ unlink($file);
 }
 
 // TestCommandAbsolutePathUnderTemp verifies that absolute paths under os.TempDir()
-// work via the temp directory preopen (not operand preopen).
+// work through the root preopen.
 func TestCommandAbsolutePathUnderTemp(t *testing.T) {
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "sample.jpg")

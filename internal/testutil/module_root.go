@@ -1,3 +1,4 @@
+// Package testutil holds helpers shared by this module's tests.
 package testutil
 
 import (
@@ -6,7 +7,8 @@ import (
 	"testing"
 )
 
-// Root returns the module root directory containing go.mod.
+// Root returns the nearest directory at or above the working directory that
+// contains go.mod. It fails the test if there is none.
 func Root(t *testing.T) string {
 	t.Helper()
 

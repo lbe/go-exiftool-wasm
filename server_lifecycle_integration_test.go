@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -27,16 +25,6 @@ func TestServerRestartJoinsGeneration(t *testing.T) {
 	}
 	s := repairServer(t)
 	old := s.generation.evalDone
-	path := filepath.Join(os.Getenv("EXIFTOOL_REPAIR_ROOT"), "storage", "a", "sample.jpg")
-	if _, err := s.Command("-Artist", path); err != nil {
-		t.Error(err)
-	}
-	select {
-	case <-old:
-	default:
-		t.Error("replacement started before previous evaluator joined")
-	}
-	old = s.generation.evalDone
 	if err := s.generation.stdinW.Close(); err != nil {
 		t.Fatal(err)
 	}
