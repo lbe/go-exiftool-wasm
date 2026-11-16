@@ -40,6 +40,16 @@ jobs:
             -coverprofile=coverage.out \
             -coverpkg=github.com/lbe/go-exiftool-wasm,github.com/lbe/go-exiftool-wasm/internal/testutil
 
+      - name: Conformance (this package)
+        working-directory: conformance
+        run: go test -race -count=1 ./...
+
+      - name: Conformance (ncruces/go-exiftool)
+        run: |
+          conformance/fetch-exiftool.sh
+          cd conformance
+          PATH="$PWD/dist:$PATH" go test -race -count=1 -tags ncruces ./...
+
       - name: Upload coverage
         uses: codecov/codecov-action@v5
         with:

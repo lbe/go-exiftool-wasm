@@ -10,6 +10,8 @@ help:
 	@echo "  make test-all      - Full suite: unit + integration + e2e (./...)"
 	@echo "  make test-race     - Same as CI: -tags=integration,e2e -race on $(PKG)"
 	@echo "  make cover         - Coverage report (coverage.html)"
+	@echo "  make conformance   - Immutable ncruces conformance suite against this package"
+	@echo "  make conformance-ncruces - Same suite against ncruces/go-exiftool and ExifTool 13.55"
 	@echo "  make lint          - golangci-lint (includes go vet)"
 	@echo "  make format        - gofmt, goimports, Prettier (see .prettierignore)"
 	@echo "  make clean         - Remove coverage artifacts"
@@ -38,9 +40,22 @@ test-race:
 	# Matches GitHub Actions: full suite under -race
 	time ( go test -tags=integration,e2e $(PKG) -race $(ARGS) )
 
+.PHONY: conformance
+conformance:
+	# Immutable ncruces conformance suite against this package
+	cd conformance && go test -race -count=1 ./...
+
+.PHONY: conformance-ncruces
+conformance-ncruces:
+	# Same suite against github.com/ncruces/go-exiftool and ExifTool 13.55
+	conformance/fetch-exiftool.sh
+	cd conformance && PATH="$$PWD/dist:$$PATH" go test -race -count=1 -tags ncruces ./...
+
 .PHONY: lint
 lint:
 	time ( golangci-lint run --max-same-issues 0 ./... )
+	cd conformance && golangci-lint run -c ../.golangci.yml --max-same-issues 0 ./...
+	cd conformance && golangci-lint run -c ../.golangci.yml --build-tags ncruces --max-same-issues 0 ./...
 
 .PHONY: cover
 cover:

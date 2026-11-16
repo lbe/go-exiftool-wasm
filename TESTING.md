@@ -25,6 +25,8 @@ The file name suffix names the test kind and must match the build tag.
 tests `cmd.go` by running the guest. `cachefs_metrics_test.go` has no build tag and no `Test`
 functions. It holds shared test fixtures.
 
+Files under `conformance/` follow their own rules; see Conformance suite.
+
 ## Local commands
 
 ```bash
@@ -54,6 +56,24 @@ go test -tags=integration,e2e -race ./... -count=1 \
 
 Coverage leaves out `internal/zeroperl`, the generated wasm2go output. CI uploads the report to
 [Codecov](https://codecov.io/gh/lbe/go-exiftool-wasm).
+
+## Conformance suite
+
+`conformance/` is a separate Go module that checks this package against
+github.com/ncruces/go-exiftool v0.4.2. Its tests use only the public API. The same tests run against
+both implementations:
+
+```bash
+make conformance          # this package
+make conformance-ncruces  # ncruces/go-exiftool with ExifTool 13.55 from conformance/fetch-exiftool.sh
+```
+
+A test that fails against ncruces is wrong. A test that fails only against this package is a
+deviation to fix. A test that skips in the default run is a divergence the owner has approved.
+
+Every file under `conformance/` is immutable. `TestConformanceFilesUnchanged` in the root package
+fails if any of them changes. A change needs the owner's approval, a regenerated
+`conformance/MANIFEST.sha256` and a new `conformanceManifestSHA256` in `conformance_guard_test.go`.
 
 ## Where to add tests
 
