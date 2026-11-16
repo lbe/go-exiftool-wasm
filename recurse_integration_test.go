@@ -48,7 +48,7 @@ func assertCommandFilenameList(t *testing.T, out []byte, err error, want []strin
 		t.Fatalf("expected non-empty output (err=%v)", err)
 	}
 	if err != nil {
-		var exitErr *ExitError
+		var exitErr *exitError
 		if !errors.As(err, &exitErr) || exitErr.Code != 1 {
 			t.Fatalf("Command: %v\noutput:\n%s", err, got)
 		}

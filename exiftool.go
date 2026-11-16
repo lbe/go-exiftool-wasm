@@ -1,6 +1,7 @@
 package exiftool
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/binary"
@@ -183,7 +184,7 @@ func newModuleAt(gio guestIO, cwd string, workFS fs.FS) (*wasm2go.Module, *wasiS
 		return nil, nil, fmt.Errorf("exiftool: sub bin: %w", err)
 	}
 
-	ws := &wasiState{cwd: cwd}
+	ws := &wasiState{cwd: cwd, ctx: context.Background()}
 	mod := wasm2go.New(ws, ws)
 	initWASIState(ws, mod, gio, buildModuleConfig(libFS, binFS, workFS))
 
@@ -222,8 +223,9 @@ func initModule(mod *wasm2go.Module, sio *serverIO) error {
 // evalModule runs Xzeroperl_init, then runs ExifTool with args through
 // exiftoolEvalWrapper, and returns the stdout a directIO captured. The guest
 // exits through proc_exit, which panics with exitPanic, and evalModule recovers
-// it. Exit 0 returns stdout. A non-zero exit returns stdout and an *ExitError
-// whose Msg includes stderr. Any other panic propagates.
+// it. Exit 0 returns stdout. A non-zero exit returns stdout and an *exitError
+// whose Msg includes stderr. If ws.ctx is done during the run, it returns the
+// stdout so far and ws.ctx.Err(). Any other panic propagates.
 //
 // Only the one-shot path uses evalModule. A Server calls initModule and runs
 // Xzeroperl_eval in its own goroutine (see evaluateServerModule), so its
@@ -231,6 +233,11 @@ func initModule(mod *wasm2go.Module, sio *serverIO) error {
 func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			if _, ok := r.(cancelPanic); ok {
+				result = guestStdoutOnExit(ws.guestIO)
+				err = ws.ctx.Err()
+				return
+			}
 			if ep, ok := r.(exitPanic); ok {
 				if ep.code == 0 {
 					if dio, ok := ws.guestIO.(*directIO); ok {
@@ -244,7 +251,7 @@ func evalModule(mod *wasm2go.Module, ws *wasiState, args ...string) (result []by
 					if dio, ok := ws.guestIO.(*directIO); ok {
 						stderrStr = dio.StderrB.String()
 					}
-					err = &ExitError{
+					err = &exitError{
 						Code: int(ep.code),
 						Msg:  fmt.Sprintf("exiftool exited with code %d\nstderr: %s", ep.code, stderrStr),
 					}

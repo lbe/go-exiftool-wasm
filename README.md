@@ -154,6 +154,9 @@ host paths. ExifTool can write or overwrite any file the process can, with flags
   Pass clean paths.
 - The embedded mounts hide host files under `/lib`, `/bin` and `/dev`.
 - Windows is not supported until wasm2go-wasi-host builds there.
+- A failed command returns a plain error, not an `*exec.ExitError`, so there is no `ExitCode()` or
+  `Stderr` field. The error text includes stderr.
+- `Exec` is kept for compatibility but ignored. ExifTool always runs in-process.
 
 ## License
 

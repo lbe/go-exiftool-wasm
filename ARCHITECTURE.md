@@ -10,8 +10,8 @@ run time there is no WASM interpreter, no host Perl and no `exiftool` binary.
 
 - No `os/exec` and no host `exiftool`. Everything ships inside the Go module.
 - The public API matches `ncruces/go-exiftool`: `Command`, `CommandContext`, `NewServer`,
-  `Server.Command`, `Server.Close`, `Server.Shutdown`, `Unmarshal`, `ExitError`, and the package
-  variables `Exec`, `Arg1` and `Config`. The package keeps `Exec` but ignores it.
+  `Server.Command`, `Server.Close`, `Server.Shutdown`, `Unmarshal`, and the package variables
+  `Exec`, `Arg1` and `Config`. The package keeps `Exec` but ignores it.
 - For the same arguments, stdout, `SourceFile` spellings and exit status should match native
   ExifTool. [Known limitations](#known-limitations) lists the exceptions.
 
@@ -56,10 +56,10 @@ flowchart TB
 | File                | Responsibility                                                                                                                                  |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `init.go`           | Package documentation; `Exec`, `Arg1`, `Config`                                                                                                 |
-| `cmd.go`            | `Command`, `CommandContext`, `ExitError`; one-shot eval and `-json` per-file error detection                                                    |
+| `cmd.go`            | `Command`, `CommandContext`, `exitError`; one-shot eval and `-json` per-file error detection                                                    |
 | `server.go`         | `Server`, interpreter generations, `serverIO` (pipes, bounded stderr, framing), stay_open protocol, restart after I/O failure                   |
 | `exiftool.go`       | `go:embed` of the Perl prefix, `perlFS`, argv prefix (`Arg1`/`Config`/charset), mount layout (`buildModuleConfig`), `newModuleAt`, `evalModule` |
-| `wasi.go`           | `wasiState` (embeds `wasihost.State`, holds the guest cwd), `exitPanic`, stdin/stdout/stderr adapters                                           |
+| `wasi.go`           | `wasiState` (embeds `wasihost.State`, holds the guest cwd), `exitPanic`, `cancelPanic`, stdin/stdout/stderr adapters                            |
 | `io.go`             | `guestIO` interface and the in-memory `directIO` backend                                                                                        |
 | `cachefs.go`        | `cachedFS`: `fs.FS` wrapper that decompresses LZ4 and caches in an LRU (via `cfsread`)                                                          |
 | `decode.go`         | `Unmarshal` for line-oriented `Key: value` output                                                                                               |
@@ -128,6 +128,9 @@ inside it, so the check never fails. Operands need no extra preopens.
   Pass clean paths.
 - The embedded mounts hide host files under `/lib`, `/bin` and `/dev`.
 - Windows is not supported until wasm2go-wasi-host builds there.
+- A failed command returns a plain error, not an `*exec.ExitError`, so there is no `ExitCode()` or
+  `Stderr` field. The error text includes stderr.
+- `Exec` is kept for compatibility but ignored. ExifTool always runs in-process.
 
 **Embedded tree.** `perlFS()` is one `cachedFS` per process over `embed/perl-wasi-prefix`, with a
 2000-entry LRU. The binary stores the files LZ4-compressed, and `cachedFS` decompresses each one on
@@ -183,21 +186,24 @@ sequenceDiagram
   Cmd->>M: evalModule(commandArgs(args))
   M->>G: zeroperl_init, zeroperl_eval(wrapper, argv)
   G-->>M: proc_exit(code) as exitPanic
-  M-->>Cmd: stdout, or ExitError{code, stderr}
+  M-->>Cmd: stdout, or exitError{code, stderr}
   Cmd-->>C: stdout / error
 ```
 
 `cmd.go` turns the guest's result into a return value by these rules:
 
-- Exit 0 with empty stderr returns stdout. If `-json` output has a per-file `Error` field, it also
-  returns `ExitError{Code: 1}`, as native ExifTool's exit status would.
-- Exit 0 with stderr text returns stdout and an error that holds the stderr text.
-- A non-zero exit returns the captured stdout and `ExitError{Code, Msg}`, where `Msg` includes
+- Exit 0 returns stdout and a nil error, even if ExifTool wrote warnings to stderr. If `-json`
+  output has a per-file `Error` field, it returns `exitError{Code: 1}`, as native ExifTool's exit
+  status would.
+- A non-zero exit returns the captured stdout and `exitError{Code, Msg}`, where `Msg` includes
   stderr.
 
-`CommandContext` checks `ctx` only before it starts. Once the guest runs, it finishes or exits;
-nothing can interrupt native guest code. Each call pays the full interpreter start-up cost, about
-0.4 s. `Server` exists to pay it once.
+`CommandContext` returns `ctx.Err()` without starting the guest if `ctx` is already done. During a
+run, `wasiState` checks `ctx` in `nanosleep`, `fd_read` and `fd_write`. Once `ctx` is done, the next
+such call panics with `cancelPanic`, and `CommandContext` returns the stdout written so far and
+`ctx.Err()`. Guest code that makes none of those calls runs until it makes one. A `Server` uses
+`context.Background()`. Each call pays the full interpreter start-up cost, about 0.4 s. `Server`
+exists to pay it once.
 
 ## Server (stay_open)
 

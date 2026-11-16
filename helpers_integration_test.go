@@ -57,11 +57,11 @@ func assertExitErrorCode(t *testing.T, err error, want int) {
 	t.Helper()
 
 	if err == nil {
-		t.Fatalf("expected *ExitError with code %d, got nil", want)
+		t.Fatalf("expected *exitError with code %d, got nil", want)
 	}
-	var exitErr *ExitError
+	var exitErr *exitError
 	if !errors.As(err, &exitErr) {
-		t.Fatalf("expected *ExitError, got %T: %v", err, err)
+		t.Fatalf("expected *exitError, got %T: %v", err, err)
 	}
 	if exitErr.Code != want {
 		t.Errorf("exit code: got %d, want %d", exitErr.Code, want)

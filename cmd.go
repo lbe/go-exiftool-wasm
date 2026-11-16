@@ -9,17 +9,17 @@ import (
 	"os"
 )
 
-// ExitError reports that ExifTool exited with a non-zero status, or that its -json
+// exitError reports that ExifTool exited with a non-zero status, or that its -json
 // output has a per-file Error field, for which native exiftool exits with status
-// 1. The function that returns an ExitError also returns the stdout ExifTool
+// 1. The function that returns an exitError also returns the stdout ExifTool
 // wrote.
-type ExitError struct {
+type exitError struct {
 	Code int    // exit status
 	Msg  string // error text; after a non-zero exit it includes stderr
 }
 
 // Error returns Msg, or a message with Code if Msg is empty.
-func (e *ExitError) Error() string {
+func (e *exitError) Error() string {
 	if e.Msg != "" {
 		return e.Msg
 	}
@@ -31,19 +31,19 @@ func (e *ExitError) Error() string {
 // "-charset filename=utf8". stdin becomes ExifTool's standard input; pass nil if
 // the command does not read it.
 //
-// A non-zero exit returns stdout and an [*ExitError]. With -json, a per-file Error
-// field also returns an *ExitError with Code 1. If ExifTool exits with status 0
-// but writes to stderr, Command returns stdout and an error that holds the stderr
-// text.
+// A non-zero exit returns stdout and an error whose text includes stderr. With
+// -json, a per-file Error field also returns an error, because native exiftool
+// exits with status 1. Warnings on stderr with exit status 0 are not errors.
 //
 // Command uses [context.Background]. See [CommandContext].
 func Command(stdin io.Reader, arg ...string) ([]byte, error) {
 	return CommandContext(context.Background(), stdin, arg...)
 }
 
-// CommandContext is like [Command], but if ctx is already done it returns ctx.Err()
-// without running ExifTool. Once the interpreter starts, it ignores ctx and runs
-// until ExifTool exits.
+// CommandContext is like [Command], but stops ExifTool when ctx is done and
+// returns the stdout written so far with ctx.Err(). If ctx is already done, it
+// returns ctx.Err() without running ExifTool. A running guest notices ctx at its
+// next sleep, read or write.
 func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []byte, err error) {
 	select {
 	case <-ctx.Done():
@@ -51,12 +51,13 @@ func CommandContext(ctx context.Context, stdin io.Reader, arg ...string) (out []
 	default:
 	}
 
-	return commandEvalModule(stdin, arg...)
+	return commandEvalModule(ctx, stdin, arg...)
 }
 
 // commandEvalModule runs one command in a new module whose guest cwd is the
 // process working directory, and turns the result into Command's return values.
-func commandEvalModule(stdin io.Reader, arg ...string) ([]byte, error) {
+// ctx stops the run when it is done.
+func commandEvalModule(ctx context.Context, stdin io.Reader, arg ...string) ([]byte, error) {
 	guestIO := newDirectIO(stdin)
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -66,25 +67,25 @@ func commandEvalModule(stdin io.Reader, arg ...string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	ws.ctx = ctx
 	out, err := evalModule(mod, ws, commandArgs(arg)...)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return out, err
+		}
 		if finished, finishErr := finishCommandResult(out, arg); finishErr != nil {
 			return finished, finishErr
 		}
 		return out, err
 	}
-
-	if dio, ok := ws.guestIO.(*directIO); ok && dio.StderrB.Len() > 0 {
-		return out, errors.New("exiftool: " + dio.StderrB.String())
-	}
 	return finishCommandResult(out, arg)
 }
 
-// finishCommandResult returns out with an *ExitError with Code 1 when -json output
+// finishCommandResult returns out with an *exitError with Code 1 when -json output
 // reports a per-file error, and with a nil error otherwise.
 func finishCommandResult(out []byte, arg []string) ([]byte, error) {
 	if code := jsonRecordsExitCode(out, arg); code != 0 {
-		return out, &ExitError{
+		return out, &exitError{
 			Code: code,
 			Msg:  "exiftool exited with code 1",
 		}

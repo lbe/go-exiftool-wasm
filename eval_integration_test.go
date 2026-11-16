@@ -44,7 +44,7 @@ func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 				if dio, ok := ws.guestIO.(*directIO); ok {
 					stderrStr = dio.StderrB.String()
 				}
-				err = &ExitError{
+				err = &exitError{
 					Code: int(ep.code),
 					Msg:  fmt.Sprintf("perl exit %d\nstderr: %s", ep.code, stderrStr),
 				}

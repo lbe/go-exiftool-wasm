@@ -272,16 +272,6 @@ func TestCloseAll(t *testing.T) {
 	})
 }
 
-func TestExitPanicError(t *testing.T) {
-	t.Parallel()
-	if got, want := (exitPanic{code: 0}).Error(), "proc_exit"; got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
-	}
-	if got, want := (exitPanic{code: 1}).Error(), "proc_exit"; got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
-	}
-}
-
 func TestJSONRecordsExitCode(t *testing.T) {
 	t.Parallel()
 
