@@ -2,7 +2,7 @@ name: Go
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -23,8 +23,31 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runs-on: ubuntu-latest
+          - os: macos
+            runs-on: macos-latest
+          - os: windows
+            runs-on: windows-latest
+            # These IMMUTABLE conformance tests pass absolute t.TempDir() paths,
+            # which contain ':' and '\' on Windows. The guest rejects such paths.
+            skip: >-
+              ^(TestCommandWriteTag|TestCommandDeleteTag|TestCommandCopyTags|TestServerWriteTag|TestServerDeleteTag|TestServerCopyTags|TestCommandFailureReturnsStdoutAndError)$
+    defaults:
+      run:
+        shell: bash
     steps:
+      # The conformance guard hashes files byte for byte, so Windows must not
+      # convert line endings on checkout.
+      - name: Keep LF line endings on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v7
 
       - name: Set up Go
@@ -35,25 +58,81 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Test
+        env:
+          SKIP: ${{ matrix.skip }}
         run: |
-          go test -v -tags=integration,e2e -race ./... -count=1 \
+          go test -v -tags=integration,e2e -race ./... -count=1 -timeout 30m \
+            ${SKIP:+-skip "$SKIP"} \
             -coverprofile=coverage.out \
             -coverpkg=github.com/lbe/go-exiftool-wasm,github.com/lbe/go-exiftool-wasm/internal/testutil
 
       - name: Conformance (ncruces/go-exiftool)
+        if: runner.os == 'Linux'
         run: make conformance-ncruces
 
       - name: Upload coverage
+        if: runner.os == 'Linux'
         uses: codecov/codecov-action@v7
         with:
           files: coverage.out
           fail_ci_if_error: false
 
+  # GitHub has no FreeBSD runner, so the suite runs in a FreeBSD VM under QEMU
+  # on a Linux runner. The Go toolchain and the module and build caches live in
+  # .ci-cache in the workspace, which the action copies into the VM and back,
+  # and actions/cache saves.
+  test-freebsd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve the Go version
+        id: ver
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache FreeBSD toolchain and build caches
+        uses: actions/cache@v6
+        with:
+          path: .ci-cache
+          key:
+            freebsd-${{ steps.ver.outputs.go-version }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            freebsd-${{ steps.ver.outputs.go-version }}-${{ hashFiles('go.sum') }}-
+            freebsd-${{ steps.ver.outputs.go-version }}-
+
+      - name: Test in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1.6.0
+        env:
+          GO_VERSION: ${{ steps.ver.outputs.go-version }}
+        with:
+          release: "15.1"
+          envs: GO_VERSION
+          run: |
+            set -eu
+            # Keep the cache outside the module so go test ./... does not see
+            # the Go toolchain source; move it back at the end to be saved.
+            CACHE=/var/tmp/ci-cache
+            rm -rf "$CACHE"
+            if [ -d .ci-cache ]; then mv .ci-cache "$CACHE"; else mkdir -p "$CACHE"; fi
+            if [ ! -x "$CACHE/go/bin/go" ] || ! "$CACHE/go/bin/go" version | grep -q "go$GO_VERSION "; then
+              rm -rf "$CACHE/go"
+              fetch -o - "https://go.dev/dl/go$GO_VERSION.freebsd-amd64.tar.gz" | tar -xzf - -C "$CACHE"
+            fi
+            export PATH="$CACHE/go/bin:$PATH"
+            export GOPATH="$CACHE/gopath" GOCACHE="$CACHE/gocache" GOTOOLCHAIN=local
+            go version
+            go test -v -tags=integration,e2e -race ./... -count=1 -timeout 60m
+            mv "$CACHE" .ci-cache
+
   release:
     if: >-
       startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' &&
       inputs.tag != '')
-    needs: test
+    needs: [test, test-freebsd]
     runs-on: ubuntu-latest
     permissions:
       contents: write

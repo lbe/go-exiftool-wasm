@@ -25,12 +25,13 @@ under `embed/` and `internal/zeroperl/`. The Perl tree is stored LZ4-compressed,
 
 **The guest sees the host filesystem.** `buildModuleConfig` configures
 [`wasm2go-wasi-host`](https://github.com/lbe/wasm2go-wasi-host) with one writable preopen of host
-`/`, so a guest path is the same as the host path. Read-only mounts at `/lib` and `/bin` hold the
-embedded Perl tree, and `/dev` holds `/dev/null`. Before ExifTool runs, the guest changes to the
-caller's working directory.
+`/`, so a guest path is the same as the host path. On Windows the preopen is the root of the working
+directory's drive, such as `C:\`, and the guest path drops the drive and uses `/`, so `C:\Users\u`
+is `/Users/u`. Read-only mounts at `/lib` and `/bin` hold the embedded Perl tree, and `/dev` holds
+`/dev/null`. Before ExifTool runs, the guest changes to the caller's working directory.
 
-**One implementation on Linux and macOS.** Windows is not supported yet. See
-[Known limitations](#known-limitations).
+**One implementation on Linux, macOS, Windows and FreeBSD.** CI runs the full suite on each of them.
+See [Supported platforms](#supported-platforms).
 
 **Start-up costs about 0.4 s.** That is the time to initialize the Perl runtime on a 24-core x86-64
 Linux host. For many files, use `NewServer` and `Server.Command`. They keep one ExifTool running
@@ -143,18 +144,36 @@ It picks the version from the first of these that is set:
 2. The `EXIFTOOL_VERSION` environment variable
 3. The latest version listed on `https://exiftool.org/history.html`
 
+## Supported platforms
+
+| OS      | Tested in CI                                      |
+| ------- | ------------------------------------------------- |
+| Linux   | amd64, on `ubuntu-latest`                         |
+| macOS   | arm64, on `macos-latest`                          |
+| Windows | amd64, on `windows-latest`                        |
+| FreeBSD | 15.1 on amd64, in a QEMU virtual machine on Linux |
+
+On Windows, ExifTool receives operands unchanged, and the guest rejects any path that contains `:`
+or `\`. Pass paths relative to the working directory with `/` separators, for example `photos/a.jpg`
+or `../b.jpg`. Absolute paths with a drive letter, paths with `\` and files on another drive are not
+reachable. [Known limitations](#known-limitations) lists the other differences.
+
 ## Writing files
 
-`Command` and `CommandContext` accept paths relative to the process working directory and absolute
-host paths. ExifTool can write or overwrite any file the process can, with flags such as
-`-overwrite_original` or `-o <outfile>`.
+`Command` and `CommandContext` accept paths relative to the process working directory and, except on
+Windows, absolute host paths. ExifTool can write or overwrite any file the process can, with flags
+such as `-overwrite_original` or `-o <outfile>`.
 
 ## Known limitations
 
 - The guest resolves `..` after a symlink lexically, but native ExifTool follows the symlink first.
   Pass clean paths.
 - The embedded mounts hide host files under `/lib`, `/bin` and `/dev`.
-- Windows is not supported until wasm2go-wasi-host builds there.
+- On Windows, operands must be relative paths with `/` separators. Absolute paths with a drive
+  letter and paths that contain `\` fail, and files on another drive than the working directory are
+  not reachable.
+- wasm2go-wasi-host lists its own limitations on each OS in its
+  [Supported platforms](https://github.com/lbe/wasm2go-wasi-host#supported-platforms) section.
 - A failed command returns a plain error, not an `*exec.ExitError`, so there is no `ExitCode()` or
   `Stderr` field. The error text includes stderr.
 - `Exec` is kept for compatibility but ignored. ExifTool always runs in-process.

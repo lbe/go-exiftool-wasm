@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -47,13 +48,12 @@ func TestCommandSourceFileMatchesOperand(t *testing.T) {
 	copySample(t, sample, filepath.Join(root, "outside", "out.jpg"))
 	t.Chdir(filepath.Join(root, "cwd"))
 
-	for _, op := range []string{
-		"in.jpg",
-		"./in.jpg",
-		filepath.Join(root, "cwd", "in.jpg"),
-		filepath.Join(root, "outside", "out.jpg"),
-		"../outside/out.jpg",
-	} {
+	operands := []string{"in.jpg", "./in.jpg", "../outside/out.jpg"}
+	if runtime.GOOS != "windows" {
+		// The guest rejects absolute Windows paths; see skipOnWindowsAbsolutePath.
+		operands = append(operands, filepath.Join(root, "cwd", "in.jpg"), filepath.Join(root, "outside", "out.jpg"))
+	}
+	for _, op := range operands {
 		rec := commandRecord(t, "-json", "-G1", "-n", op)
 		if rec["SourceFile"] != op {
 			t.Errorf("operand %q: SourceFile = %v", op, rec["SourceFile"])
@@ -89,6 +89,9 @@ func TestCommandRelativeSymlinkOutsideCwd(t *testing.T) {
 }
 
 func TestCommandCwdWithQuoteAndBackslash(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(`'\' is a path separator on Windows, so a directory name cannot contain it`)
+	}
 	sample, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +107,7 @@ func TestCommandCwdWithQuoteAndBackslash(t *testing.T) {
 }
 
 func TestServerNoRestartAcrossDirectories(t *testing.T) {
+	skipOnWindowsAbsolutePath(t)
 	sample, err := os.ReadFile("testdata/sample.jpg")
 	if err != nil {
 		t.Fatal(err)

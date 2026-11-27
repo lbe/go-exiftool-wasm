@@ -145,20 +145,32 @@ func packageArgs() []string {
 	return args
 }
 
+// guestRoot splits the host working directory cwd into the host directory that
+// the guest's "/" preopen maps to and the guest path of cwd. On Linux, macOS and
+// FreeBSD the host root is "/" and the guest path is cwd. On Windows the host
+// root is the volume of cwd, such as `C:\` or `\\server\share\`, and the guest
+// path is the rest of cwd with forward slashes, because the guest rejects paths
+// that contain ':' or '\'.
+func guestRoot(cwd string) (hostRoot, guestCwd string) {
+	vol := filepath.VolumeName(cwd)
+	return vol + string(filepath.Separator), filepath.ToSlash(cwd[len(vol):])
+}
+
 // buildModuleConfig returns the WASI configuration for a zeroperl guest. It
 // mounts:
-//   - "/": a writable preopen of host "/", so a guest path is the host path
+//   - "/": a writable preopen of hostRoot (see guestRoot); on Linux, macOS and
+//     FreeBSD hostRoot is "/", so a guest path is the host path
 //   - "/lib" and "/bin": libFS and binFS, read-only; they hide the host
 //     directories with the same names
 //   - "/dev": devNullFS, read-only
 //   - "/work": workFS, read-only, if workFS is not nil
 //
 // It also enables the wall and monotonic clocks, nanosleep and crypto/rand.
-func buildModuleConfig(libFS, binFS fs.FS, workFS fs.FS) *wasihost.ModuleConfig {
+func buildModuleConfig(hostRoot string, libFS, binFS fs.FS, workFS fs.FS) *wasihost.ModuleConfig {
 	moduleCfg := wasihost.NewModuleConfig().
 		WithReadOnlyFS("/lib", libFS).
 		WithReadOnlyFS("/bin", binFS).
-		WithHostDirectoryPreopen("/", "/").
+		WithHostDirectoryPreopen("/", hostRoot).
 		WithReadOnlyFS("/dev", devNullFS{}).
 		WithSysWalltime().
 		WithSysNanotime().
@@ -172,9 +184,10 @@ func buildModuleConfig(libFS, binFS fs.FS, workFS fs.FS) *wasihost.ModuleConfig 
 }
 
 // newModuleAt creates and initializes a zeroperl module that uses gio for stdio.
-// Its Perl wrapper changes the guest to cwd before ExifTool runs.
+// cwd is a host directory. Its Perl wrapper changes the guest to the guest path
+// of cwd before ExifTool runs.
 func newModuleAt(gio guestIO, cwd string, workFS fs.FS) (*wasm2go.Module, *wasiState, error) {
-	cwd = filepath.Clean(cwd)
+	hostRoot, guestCwd := guestRoot(filepath.Clean(cwd))
 	libFS, err := fs.Sub(perlFS(), "lib")
 	if err != nil {
 		return nil, nil, fmt.Errorf("exiftool: sub lib: %w", err)
@@ -184,9 +197,9 @@ func newModuleAt(gio guestIO, cwd string, workFS fs.FS) (*wasm2go.Module, *wasiS
 		return nil, nil, fmt.Errorf("exiftool: sub bin: %w", err)
 	}
 
-	ws := &wasiState{cwd: cwd, ctx: context.Background()}
+	ws := &wasiState{cwd: guestCwd, ctx: context.Background()}
 	mod := wasm2go.New(ws, ws)
-	initWASIState(ws, mod, gio, buildModuleConfig(libFS, binFS, workFS))
+	initWASIState(ws, mod, gio, buildModuleConfig(hostRoot, libFS, binFS, workFS))
 
 	mod.X_initialize()
 

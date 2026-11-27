@@ -7,8 +7,54 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// skipOnWindowsAbsolutePath skips a test whose subject is an absolute host path
+// operand. On Windows such a path has a drive letter, and the guest rejects any
+// path that contains ':' or '\'.
+func skipOnWindowsAbsolutePath(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("absolute Windows paths contain ':' and '\\', which the guest rejects")
+	}
+}
+
+// guestOperand returns hostPath as a test passes it to the guest. Outside
+// Windows that is hostPath itself. On Windows it is hostPath relative to the
+// working directory, with forward slashes, because the guest rejects absolute
+// Windows paths. It skips the test if hostPath is on another volume.
+func guestOperand(t *testing.T, hostPath string) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return hostPath
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(cwd, hostPath)
+	if err != nil {
+		t.Skipf("%s is not reachable from %s: %v", hostPath, cwd, err)
+	}
+	return filepath.ToSlash(rel)
+}
+
+// guestTempDir returns a new temporary directory as a test passes it to the
+// guest. Outside Windows that is its absolute path. On Windows the temporary
+// directory can be on another volume than the working directory, so
+// guestTempDir changes to it and returns ".".
+func guestTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS != "windows" {
+		return dir
+	}
+	t.Chdir(dir)
+	return "."
+}
 
 func chdirTo(t *testing.T, dir string) {
 	t.Helper()

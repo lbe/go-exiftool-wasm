@@ -112,7 +112,7 @@ flowchart LR
 
 | Guest path     | Kind                         | Backing                                                                                |
 | -------------- | ---------------------------- | -------------------------------------------------------------------------------------- |
-| `/`            | writable host dir preopen    | host `/`; a guest path is the same as the host path                                    |
+| `/`            | writable host dir preopen    | host `/`, so a guest path is the same as the host path; on Windows, see below          |
 | `/lib`, `/bin` | read-only `fs.FS`            | `perlFS()` subtrees; `/bin/exiftool` is the driver script; hide host `/lib` and `/bin` |
 | `/dev`         | read-only `fs.FS`            | `devNullFS` (`/dev/null`)                                                              |
 | `/work`        | read-only `fs.FS` (optional) | `workFS` parameter; every current caller passes `nil`                                  |
@@ -122,12 +122,20 @@ mounts take precedence over the root preopen for their prefixes. A writable host
 symlinks to its host root with `EvalSymlinks`. When the host root is `/`, every resolved path is
 inside it, so the check never fails. Operands need no extra preopens.
 
+On Windows, `guestRoot` in `exiftool.go` maps the host working directory onto the guest. The root
+preopen is the volume of the working directory, such as `C:\` or `\\server\share\`, and the guest
+cwd is the rest of the path with `/` separators. wasm2go-wasi-host rejects guest paths that contain
+`:` or `\`, so operands must be relative paths with `/` separators. On Linux, macOS and FreeBSD
+`guestRoot` returns `/` and the cwd unchanged.
+
 ### Known limitations
 
 - The guest resolves `..` after a symlink lexically, but native ExifTool follows the symlink first.
   Pass clean paths.
 - The embedded mounts hide host files under `/lib`, `/bin` and `/dev`.
-- Windows is not supported until wasm2go-wasi-host builds there.
+- On Windows, operands must be relative paths with `/` separators. Absolute paths with a drive
+  letter and paths that contain `\` fail, and files on another drive than the working directory are
+  not reachable.
 - A failed command returns a plain error, not an `*exec.ExitError`, so there is no `ExitCode()` or
   `Stderr` field. The error text includes stderr.
 - `Exec` is kept for compatibility but ignored. ExifTool always runs in-process.
@@ -261,7 +269,7 @@ Concurrency and lifecycle rules:
 
 See [TESTING.md](TESTING.md). The file suffix and build tag mark each test kind: `*_test.go` for
 unit tests, `*_integration_test.go` with `integration`, and `*_e2e_test.go` with `e2e`. CI runs all
-of them under `-race`, and golangci-lint runs with both tags and again with `ncruces`. README.md
-describes how to rebuild the embedded tree with `dist.pl` and `cfsread-lz4`. The immutable
-conformance suite, `conformance_*_test.go`, runs the same public-API tests against this package
-(`integration` tag) and against ncruces/go-exiftool (`ncruces` tag).
+of them under `-race` on Linux, macOS, Windows and FreeBSD, and golangci-lint runs with both tags
+and again with `ncruces`. README.md describes how to rebuild the embedded tree with `dist.pl` and
+`cfsread-lz4`. The immutable conformance suite, `conformance_*_test.go`, runs the same public-API
+tests against this package (`integration` tag) and against ncruces/go-exiftool (`ncruces` tag).

@@ -47,17 +47,33 @@ go test -tags=integration -bench=. -run=^$ -timeout 30m
 
 ## CI
 
-GitHub Actions runs the full suite under `-race` with coverage on every push and pull request to
-`main`:
+GitHub Actions runs the full suite under `-race` with coverage on every push to `dev` and `main`, on
+every pull request to `main`, and on every `v*` tag:
 
 ```bash
-go test -tags=integration,e2e -race ./... -count=1 \
+go test -tags=integration,e2e -race ./... -count=1 -timeout 30m \
   -coverprofile=coverage.out \
   -coverpkg=github.com/lbe/go-exiftool-wasm,github.com/lbe/go-exiftool-wasm/internal/testutil
 ```
 
-Coverage leaves out `internal/zeroperl`, the generated wasm2go output. CI uploads the report to
-[Codecov](https://codecov.io/gh/lbe/go-exiftool-wasm). CI then runs `make conformance-ncruces`.
+The suite runs on `ubuntu-latest`, `macos-latest` and `windows-latest`, and in a FreeBSD 15.1 VM
+under QEMU on `ubuntu-latest`. A push to `dev` is the development check. A push to `main` runs the
+same jobs, and a tag also publishes a GitHub release once every test job passes.
+
+- Windows checks out with `core.autocrlf false`, because `TestConformanceFilesUnchanged` hashes the
+  files byte for byte.
+- On Windows, CI skips seven conformance tests that pass absolute `t.TempDir()` paths:
+  `TestCommandWriteTag`, `TestCommandDeleteTag`, `TestCommandCopyTags`, `TestServerWriteTag`,
+  `TestServerDeleteTag`, `TestServerCopyTags` and `TestCommandFailureReturnsStdoutAndError`. The
+  guest rejects absolute Windows paths, and the conformance files cannot change.
+- Integration tests whose subject is an absolute path call `skipOnWindowsAbsolutePath`. Others pass
+  paths through `guestOperand` or `guestTempDir`, which give relative paths on Windows.
+
+Coverage leaves out `internal/zeroperl`, the generated wasm2go output. The Linux job uploads the
+report to [Codecov](https://codecov.io/gh/lbe/go-exiftool-wasm) and then runs
+`make conformance-ncruces`. Only Linux runs it, because ncruces/go-exiftool runs a native
+`exiftool`, and on Windows Go cannot run the extensionless Perl script that `fetch-exiftool.sh`
+installs.
 
 ## Conformance suite
 

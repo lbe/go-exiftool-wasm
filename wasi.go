@@ -24,7 +24,7 @@ type cancelPanic struct{}
 type wasiState struct {
 	*wasihost.State
 	guestIO guestIO
-	cwd     string          // host cwd the guest chdirs to
+	cwd     string          // guest path of the host cwd, which the guest chdirs to
 	ctx     context.Context // one-shot command context; context.Background for a Server
 }
 

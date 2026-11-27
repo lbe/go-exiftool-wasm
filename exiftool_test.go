@@ -1,6 +1,7 @@
 package exiftool
 
 import (
+	"runtime"
 	"testing"
 )
 
@@ -100,6 +101,28 @@ func TestPerlQuote(t *testing.T) {
 	for _, tt := range tests {
 		if got := perlQuote(tt.in); got != tt.want {
 			t.Errorf("perlQuote(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestGuestRoot(t *testing.T) {
+	tests := []struct{ cwd, hostRoot, guestCwd string }{
+		{"/", "/", "/"},
+		{"/home/u", "/", "/home/u"},
+		{`/home/it's \dir`, "/", `/home/it's \dir`},
+	}
+	if runtime.GOOS == "windows" {
+		tests = []struct{ cwd, hostRoot, guestCwd string }{
+			{`C:\`, `C:\`, "/"},
+			{`C:\Users\u`, `C:\`, "/Users/u"},
+			{`D:\a\b c`, `D:\`, "/a/b c"},
+			{`\\server\share\dir`, `\\server\share\`, "/dir"},
+		}
+	}
+	for _, tt := range tests {
+		hostRoot, guestCwd := guestRoot(tt.cwd)
+		if hostRoot != tt.hostRoot || guestCwd != tt.guestCwd {
+			t.Errorf("guestRoot(%q) = %q, %q, want %q, %q", tt.cwd, hostRoot, guestCwd, tt.hostRoot, tt.guestCwd)
 		}
 	}
 }

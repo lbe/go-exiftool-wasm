@@ -12,7 +12,7 @@ import (
 )
 
 func TestWASISeekTell(t *testing.T) {
-	runSeekTellScript(t, t.TempDir(), []string{
+	runSeekTellScript(t, guestTempDir(t), []string{
 		"tell_open:0",
 		"tell_seek:5",
 		"tell_write:8",
@@ -21,6 +21,7 @@ func TestWASISeekTell(t *testing.T) {
 }
 
 func TestWASISeekTellEvalSymlinksPreopenPath(t *testing.T) {
+	skipOnWindowsAbsolutePath(t)
 	tmpDir := t.TempDir()
 	canonical, err := filepath.EvalSymlinks(tmpDir)
 	if err != nil {
@@ -86,7 +87,7 @@ func runSeekTellScript(t *testing.T, hostDir string, wantLines []string) {
 }
 
 func TestWASISequentialOffset(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := guestTempDir(t)
 
 	script := `
 my $file = $ARGV[0] . "/seqtest.bin";
@@ -129,7 +130,7 @@ unlink($file);
 }
 
 func TestWASISeekFromEnd(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := guestTempDir(t)
 
 	script := `
 my $file = $ARGV[0] . "/seekend.bin";
@@ -170,6 +171,7 @@ unlink($file);
 // TestCommandAbsolutePathUnderTemp verifies that absolute paths under os.TempDir()
 // work through the root preopen.
 func TestCommandAbsolutePathUnderTemp(t *testing.T) {
+	skipOnWindowsAbsolutePath(t)
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "sample.jpg")
 
@@ -186,6 +188,7 @@ func TestCommandAbsolutePathUnderTemp(t *testing.T) {
 }
 
 func TestCommandAbsolutePathOutsideCwdAndTemp(t *testing.T) {
+	skipOnWindowsAbsolutePath(t)
 	root := testutil.Root(t)
 	chdirTo(t, filepath.Join(root, "testdata", "dotdot", "work"))
 	outside := filepath.Join(root, "testdata", "dotdot", "outside", "sample.jpg")
@@ -195,6 +198,7 @@ func TestCommandAbsolutePathOutsideCwdAndTemp(t *testing.T) {
 }
 
 func TestCommandJSONAbsolutePathOutsideCwdAndTemp(t *testing.T) {
+	skipOnWindowsAbsolutePath(t)
 	root := testutil.Root(t)
 	chdirTo(t, filepath.Join(root, "testdata", "dotdot", "work"))
 	outside := filepath.Join(root, "testdata", "dotdot", "outside", "empty.jpg")
@@ -205,6 +209,7 @@ func TestCommandJSONAbsolutePathOutsideCwdAndTemp(t *testing.T) {
 }
 
 func TestCommandAbsolutePathMixedRelativeAndAbsolute(t *testing.T) {
+	skipOnWindowsAbsolutePath(t)
 	root := testutil.Root(t)
 	chdirTo(t, filepath.Join(root, "testdata", "dotdot", "work"))
 	outside := filepath.Join(root, "testdata", "dotdot", "outside", "sample.jpg")
@@ -233,6 +238,7 @@ func TestCommandRelativePathOutsideHostViaDotDot(t *testing.T) {
 }
 
 func TestCommandAbsolutePathUnderCwd(t *testing.T) {
+	skipOnWindowsAbsolutePath(t)
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -243,6 +249,7 @@ func TestCommandAbsolutePathUnderCwd(t *testing.T) {
 }
 
 func TestCommandAbsolutePathMultipleFiles(t *testing.T) {
+	skipOnWindowsAbsolutePath(t)
 	dir := t.TempDir()
 	outside := filepath.Join(dir, "sample.jpg")
 	src, err := os.ReadFile(testutil.SampleJPEG(t))

@@ -9,16 +9,17 @@ import (
 )
 
 // scriptPreamble returns the prefix for arbitrary Perl in integration tests. It
-// enables autoflush on STDOUT and STDERR, chdirs to the host cwd, and restores the
-// default output handle. Production ExifTool paths use exiftoolEvalWrapper instead.
+// enables autoflush on STDOUT and STDERR, chdirs to the guest path cwd, and
+// restores the default output handle. Production ExifTool paths use
+// exiftoolEvalWrapper instead.
 func scriptPreamble(cwd string) string {
 	return "BEGIN { my $old = select(STDOUT); $| = 1; select(STDERR); $| = 1; select($old); chdir " + perlQuote(cwd) + " or die $!; }\n"
 }
 
 // evalTestPerl evaluates an arbitrary Perl script through the zeroperl wasm2go
 // module and returns stdout output. The script is prepended with scriptPreamble
-// (chdir to the host cwd). args are passed as @ARGV. Host paths are reachable
-// through the root preopen.
+// (chdir to the guest path of the host cwd). args are passed as @ARGV. Host
+// paths are reachable through the root preopen.
 func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -60,7 +61,7 @@ func evalTestPerl(script string, args ...string) (stdout []byte, err error) {
 	}
 
 	mem := ws.mem()
-	fullScript := scriptPreamble(cwd) + script
+	fullScript := scriptPreamble(ws.cwd) + script
 	scriptPtr := mod.Xmalloc(int32(len(fullScript) + 1))
 	copy(mem[scriptPtr:], fullScript)
 	mem[scriptPtr+int32(len(fullScript))] = 0

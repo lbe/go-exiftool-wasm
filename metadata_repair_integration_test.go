@@ -102,7 +102,7 @@ func TestServerSymlinkAliasesAndStruct(t *testing.T) {
 	s := repairServer(t)
 	first := s.generation
 	for _, rel := range []string{"alias/a/sample.jpg", "alias2/a/sample.jpg", "alias/nested/sample.jpg", "storage/a/sample.jpg"} {
-		path := filepath.Join(root, rel)
+		path := guestOperand(t, filepath.Join(root, rel))
 		// The tags command must discover its operand without a preceding raw command.
 		repairTags(t, s, path)
 		out, err := s.Command("-q", "-q", "-b", "-XMP", path)
@@ -129,7 +129,7 @@ func TestServerStderrIdentityAfterStaleDiagnostics(t *testing.T) {
 		s.generation.sio.stderrB.Reset()
 		s.generation.sio.stderrMu.Unlock()
 		_, _ = s.generation.sio.WriteStderr(bytes.Repeat([]byte{'s'}, offset))
-		path := filepath.Join(root, "alias", "a", fmt.Sprintf("missing-%d.jpg", offset))
+		path := guestOperand(t, filepath.Join(root, "alias", "a", fmt.Sprintf("missing-%d.jpg", offset)))
 		_, err := s.Command("-q", "-q", "-b", "-XMP", path)
 		if err == nil || !strings.Contains(err.Error(), "Error: File not found - "+path) {
 			t.Errorf("old offset %d: intact error identity/operand missing: %v", offset, err)
@@ -150,7 +150,7 @@ func TestServerStderrOverflowAndRecovery(t *testing.T) {
 		t.Errorf("stderr overflow must be explicit: %v", err)
 	}
 	for i := 0; i < 20; i++ {
-		path := filepath.Join(os.Getenv("EXIFTOOL_REPAIR_ROOT"), "alias", "a", "missing.jpg")
+		path := guestOperand(t, filepath.Join(os.Getenv("EXIFTOOL_REPAIR_ROOT"), "alias", "a", "missing.jpg"))
 		_, err = s.Command("-q", "-q", "-b", "-XMP", path)
 		if err == nil || !strings.Contains(err.Error(), "File not found - "+path) {
 			t.Errorf("failure %d: %v", i, err)
@@ -176,7 +176,7 @@ func TestCommandSymlinkAlias(t *testing.T) {
 	if repairSubprocess(t, "oneshot") {
 		return
 	}
-	path := filepath.Join(os.Getenv("EXIFTOOL_REPAIR_ROOT"), "alias2", "a", "sample.jpg")
+	path := guestOperand(t, filepath.Join(os.Getenv("EXIFTOOL_REPAIR_ROOT"), "alias2", "a", "sample.jpg"))
 	out, err := Command(nil, "-q", "-q", "-b", "-XMP", path)
 	if err != nil || !bytes.Equal(out, []byte(repairXMP)) {
 		t.Errorf("one-shot raw original alias: out=%q err=%v", out, err)
