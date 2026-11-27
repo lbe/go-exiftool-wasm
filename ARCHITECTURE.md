@@ -261,6 +261,7 @@ Concurrency and lifecycle rules:
 
 See [TESTING.md](TESTING.md). The file suffix and build tag mark each test kind: `*_test.go` for
 unit tests, `*_integration_test.go` with `integration`, and `*_e2e_test.go` with `e2e`. CI runs all
-of them under `-race`, and golangci-lint runs with both tags. README.md describes how to rebuild the
-embedded tree with `dist.pl` and `cfsread-lz4`. The immutable `conformance/` module runs the same
-public-API tests against this package and against ncruces/go-exiftool.
+of them under `-race`, and golangci-lint runs with both tags and again with `ncruces`. README.md
+describes how to rebuild the embedded tree with `dist.pl` and `cfsread-lz4`. The immutable
+conformance suite, `conformance_*_test.go`, runs the same public-API tests against this package
+(`integration` tag) and against ncruces/go-exiftool (`ncruces` tag).

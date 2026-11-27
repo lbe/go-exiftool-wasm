@@ -76,8 +76,9 @@ See [TESTING.md](TESTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md). The file na
 test it holds: `*_test.go` is a unit test with no build tag, `*_integration_test.go` needs the
 `integration` tag, and `*_e2e_test.go` needs the `e2e` tag.
 
-`conformance/` holds immutable tests that check this package against github.com/ncruces/go-exiftool;
-see [TESTING.md](TESTING.md).
+The `conformance_*_test.go` files hold immutable tests that check this package against
+github.com/ncruces/go-exiftool. The full suite runs them against this package, and
+`make conformance-ncruces` runs them against ncruces; see [TESTING.md](TESTING.md).
 
 Run the unit tests:
 

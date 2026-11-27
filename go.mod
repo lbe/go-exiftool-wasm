@@ -4,7 +4,8 @@ go 1.27
 
 require (
 	github.com/lbe/cfsread v0.1.0
-	github.com/lbe/wasm2go-wasi-host v0.0.0-20260607151207-5e095ad9072e
+	github.com/lbe/wasm2go-wasi-host v0.2.0
+	github.com/ncruces/go-exiftool v0.4.2
 	github.com/pierrec/lz4/v4 v4.1.33
 )
 

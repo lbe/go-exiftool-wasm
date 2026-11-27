@@ -34,4 +34,4 @@ AGENTS.md
 CLAUDE.md
 
 coverage.*
-/conformance/dist/
+/testdata/conformance/dist/

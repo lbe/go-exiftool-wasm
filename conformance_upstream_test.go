@@ -1,10 +1,12 @@
 // IMMUTABLE: conformance test for drop-in compatibility with
 // github.com/ncruces/go-exiftool v0.4.2. Do not edit, rename, reformat or delete
 // anything in this file. A change needs the repository owner's explicit
-// approval, a regenerated MANIFEST.sha256 and a new conformanceManifestSHA256 in
-// ../conformance_guard_test.go.
+// approval, a regenerated testdata/conformance/MANIFEST.sha256 and a new
+// conformanceManifestSHA256 in conformance_guard_test.go.
 
-package exiftool
+//go:build integration || ncruces
+
+package exiftool_test
 
 import (
 	"bytes"

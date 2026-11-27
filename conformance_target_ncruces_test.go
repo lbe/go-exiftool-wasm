@@ -1,21 +1,22 @@
 // IMMUTABLE: conformance infrastructure. It selects the implementation under
-// test: this package by default, github.com/ncruces/go-exiftool with -tags ncruces.
-// Do not edit; see the header of contract_test.go.
+// test: this package with -tags integration, github.com/ncruces/go-exiftool with
+// -tags ncruces.
+// Do not edit; see the header of conformance_contract_test.go.
 
-//go:build !ncruces
+//go:build ncruces
 
-package exiftool
+package exiftool_test
 
 import (
 	"context"
 	"io"
 
-	impl "github.com/lbe/go-exiftool-wasm"
+	impl "github.com/ncruces/go-exiftool"
 )
 
 const (
-	target   = "wasm"
-	implPath = "github.com/lbe/go-exiftool-wasm"
+	target   = "ncruces"
+	implPath = "github.com/ncruces/go-exiftool"
 )
 
 var (

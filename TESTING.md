@@ -5,11 +5,12 @@ adds the integration and e2e files.
 
 ## Tags
 
-| Tag               | Command                               | What runs                             |
-| ----------------- | ------------------------------------- | ------------------------------------- |
-| _(none)_          | `go test ./...`                       | Unit tests only, with no Perl or WASM |
-| `integration`     | `go test -tags=integration ./...`     | Unit and integration tests            |
-| `integration,e2e` | `go test -tags=integration,e2e ./...` | Unit, integration and e2e tests       |
+| Tag               | Command                               | What runs                                                                       |
+| ----------------- | ------------------------------------- | ------------------------------------------------------------------------------- |
+| _(none)_          | `go test ./...`                       | Unit tests only, with no Perl or WASM                                           |
+| `integration`     | `go test -tags=integration ./...`     | Unit and integration tests, and the conformance suite against this package      |
+| `integration,e2e` | `go test -tags=integration,e2e ./...` | Unit, integration and e2e tests, and the conformance suite against this package |
+| `ncruces`         | `go test -tags=ncruces .`             | Unit tests, and the conformance suite against github.com/ncruces/go-exiftool    |
 
 ## File naming
 
@@ -25,7 +26,7 @@ The file name suffix names the test kind and must match the build tag.
 tests `cmd.go` by running the guest. `cachefs_metrics_test.go` has no build tag and no `Test`
 functions. It holds shared test fixtures.
 
-Files under `conformance/` follow their own rules; see Conformance suite.
+The conformance suite files, `conformance_*_test.go`, follow their own rules; see Conformance suite.
 
 ## Local commands
 
@@ -36,6 +37,7 @@ go test -tags=integration,e2e -race ./... -count=1
 ```
 
 The Makefile has matching targets: `make test`, `make test-all`, `make test-race` and `make lint`.
+`make conformance-ncruces` runs the conformance suite against github.com/ncruces/go-exiftool.
 
 The benchmarks need the integration tag and take a long time:
 
@@ -55,25 +57,33 @@ go test -tags=integration,e2e -race ./... -count=1 \
 ```
 
 Coverage leaves out `internal/zeroperl`, the generated wasm2go output. CI uploads the report to
-[Codecov](https://codecov.io/gh/lbe/go-exiftool-wasm).
+[Codecov](https://codecov.io/gh/lbe/go-exiftool-wasm). CI then runs `make conformance-ncruces`.
 
 ## Conformance suite
 
-`conformance/` is a separate Go module that checks this package against
-github.com/ncruces/go-exiftool v0.4.2. Its tests use only the public API. The same tests run against
-both implementations:
+The conformance suite checks this package against github.com/ncruces/go-exiftool v0.4.2. It is the
+`conformance_*_test.go` files in package `exiftool_test`, and it uses only the public API. The same
+tests run against both implementations:
 
 ```bash
-make conformance          # this package
-make conformance-ncruces  # ncruces/go-exiftool with ExifTool 13.55 from conformance/fetch-exiftool.sh
+make test-all             # this package (also make test-race)
+make conformance-ncruces  # github.com/ncruces/go-exiftool and the exiftool on $PATH
 ```
+
+`conformance_target_inprocess_test.go` (`integration`, not `ncruces`) and
+`conformance_target_ncruces_test.go` (`ncruces`) select the implementation under test. ncruces runs
+the `exiftool` found on `$PATH`. When there is none, `testdata/conformance/fetch-exiftool.sh`
+installs ExifTool 13.55 into `testdata/conformance/dist`.
 
 A test that fails against ncruces is wrong. A test that fails only against this package is a
 deviation to fix. A test that skips in the default run is a divergence the owner has approved.
 
-Every file under `conformance/` is immutable. `TestConformanceFilesUnchanged` in the root package
-fails if any of them changes. A change needs the owner's approval, a regenerated
-`conformance/MANIFEST.sha256` and a new `conformanceManifestSHA256` in `conformance_guard_test.go`.
+The suite is immutable. `testdata/conformance/MANIFEST.sha256` lists its files: the
+`conformance_*_test.go` files other than `conformance_guard_test.go`, everything under
+`testdata/conformance/` other than `dist`, and the shared `testdata/sample*` files it reads.
+`TestConformanceFilesUnchanged` fails if a listed file changes or goes missing, or an unlisted
+conformance file appears. A change needs the owner's approval, a regenerated manifest and a new
+`conformanceManifestSHA256` in `conformance_guard_test.go`.
 
 ## Where to add tests
 

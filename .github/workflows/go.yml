@@ -25,10 +25,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -40,18 +40,11 @@ jobs:
             -coverprofile=coverage.out \
             -coverpkg=github.com/lbe/go-exiftool-wasm,github.com/lbe/go-exiftool-wasm/internal/testutil
 
-      - name: Conformance (this package)
-        working-directory: conformance
-        run: go test -race -count=1 ./...
-
       - name: Conformance (ncruces/go-exiftool)
-        run: |
-          conformance/fetch-exiftool.sh
-          cd conformance
-          PATH="$PWD/dist:$PATH" go test -race -count=1 -tags ncruces ./...
+        run: make conformance-ncruces
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.out
           fail_ci_if_error: false
@@ -65,7 +58,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref:
@@ -88,7 +81,7 @@ jobs:
           cat /tmp/changelog.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
           name: Release ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
